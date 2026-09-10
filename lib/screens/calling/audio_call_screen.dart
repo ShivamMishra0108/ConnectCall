@@ -1,11 +1,17 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/services/calling_service.dart';
+import '../../core/services/signaling_service.dart';
 import '../../core/theme/app_theme.dart';
+import '../../models/call_model.dart';
+import '../../providers/auth_provider.dart';
+import '../../providers/call_provider.dart';
 import 'call_ended_screen.dart';
 
-class AudioCallScreen extends StatefulWidget {
+class AudioCallScreen extends ConsumerStatefulWidget {
   final String userName;
   final String? userId;
 
@@ -16,36 +22,292 @@ class AudioCallScreen extends StatefulWidget {
   });
 
   @override
-  State<AudioCallScreen> createState() =>
+  ConsumerState<AudioCallScreen> createState() =>
       _AudioCallScreenState();
 }
 
-class _AudioCallScreenState extends State<AudioCallScreen> {
+class _AudioCallScreenState
+    extends ConsumerState<AudioCallScreen> {
   Timer? _timer;
 
+  final CallingService _callingService =
+      CallingService();
+
+  final SignalingService _signalingService =
+      SignalingService();
+
   int _seconds = 0;
+
   bool _isMuted = false;
   bool _isSpeakerOn = false;
+  bool _isConnected = false;
+  bool _isStarting = true;
 
   @override
   void initState() {
     super.initState();
 
+    _startCall();
+  }
+
+  Future<void> _startCall() async {
+    try {
+      if (widget.userId == null) {
+        throw const CallingException(
+          'This contact does not have a valid user ID.',
+        );
+      }
+
+      final currentUser =
+          ref.read(authProvider).currentUser;
+
+      if (currentUser == null) {
+        throw const CallingException(
+          'You are not logged in.',
+        );
+      }
+
+      await _callingService.initializeLocalMedia(
+        video: false,
+      );
+
+      await _signalingService.connect(
+        userId: currentUser.id,
+      );
+
+      await _callingService.createConnection(
+        onIceCandidate: (candidate) {
+          _signalingService.sendIceCandidate(
+            receiverId: widget.userId!,
+            candidate: {
+              'candidate': candidate.candidate,
+              'sdpMid': candidate.sdpMid,
+              'sdpMLineIndex':
+                  candidate.sdpMLineIndex,
+            },
+          );
+        },
+        onRemoteStream: (_) {},
+      );
+
+      _signalingService.onCallAccepted(
+        (data) async {
+          try {
+            final offer =
+                await _callingService.createOffer();
+
+            _signalingService.sendOffer(
+              receiverId: widget.userId!,
+              offer: {
+                'type': offer.type,
+                'sdp': offer.sdp,
+              },
+            );
+          } catch (e) {
+            _showError(e.toString());
+          }
+        },
+      );
+
+      _signalingService.onAnswer(
+        (data) async {
+          final answer =
+              data['answer'] as Map;
+
+          await _callingService
+              .setRemoteDescription(
+            type: answer['type'] as String,
+            sdp: answer['sdp'] as String,
+          );
+
+          if (!mounted) return;
+
+          setState(() {
+            _isConnected = true;
+            _isStarting = false;
+          });
+
+          _startTimer();
+          ref
+              .read(callProvider.notifier)
+              .markConnected();
+        },
+      );
+
+      _signalingService.onCallDeclined(
+        (data) {
+          if (!mounted) return;
+
+          _endCall(
+            showEndedScreen: true,
+          );
+        },
+      );
+
+      _signalingService.onCallEnded(
+        (data) {
+          if (!mounted) return;
+
+          _endCall(
+            showEndedScreen: true,
+          );
+        },
+      );
+
+      ref
+          .read(callProvider.notifier)
+          .startOutgoingCall(
+            receiverId: widget.userId!,
+            receiverName: widget.userName,
+            type: CallType.audio,
+          );
+
+      final call =
+          ref.read(callProvider).activeCall;
+
+      if (call == null) {
+        throw const CallingException(
+          'Unable to create call.',
+        );
+      }
+
+      _signalingService.sendCall(
+        callerId: currentUser.id,
+        callerName: currentUser.name,
+        receiverId: widget.userId!,
+        callId: call.id,
+        callType: 'audio',
+      );
+
+      if (mounted) {
+        setState(() {
+          _isStarting = false;
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        _isStarting = false;
+      });
+
+      _showError(e.toString());
+    }
+  }
+
+  void _startTimer() {
+    if (_timer != null) return;
+
     _timer = Timer.periodic(
       const Duration(seconds: 1),
       (_) {
-        if (mounted) {
-          setState(() {
-            _seconds++;
-          });
-        }
+        if (!mounted) return;
+
+        setState(() {
+          _seconds++;
+        });
       },
+    );
+  }
+
+  Future<void> _toggleMute() async {
+    final newValue = !_isMuted;
+
+    await _callingService.setMicrophoneEnabled(
+      !newValue,
+    );
+
+    if (!mounted) return;
+
+    setState(() {
+      _isMuted = newValue;
+    });
+
+    ref
+        .read(callProvider.notifier)
+        .toggleMute();
+  }
+
+  Future<void> _toggleSpeaker() async {
+    final newValue = !_isSpeakerOn;
+
+    await _callingService.setSpeakerEnabled(
+      newValue,
+    );
+
+    if (!mounted) return;
+
+    setState(() {
+      _isSpeakerOn = newValue;
+    });
+
+    ref
+        .read(callProvider.notifier)
+        .toggleSpeaker();
+  }
+
+  Future<void> _endCall({
+    bool showEndedScreen = true,
+  }) async {
+    _timer?.cancel();
+
+    final duration = _formattedTime;
+
+    final currentCall =
+        ref.read(callProvider).activeCall;
+
+    if (currentCall != null) {
+      ref
+          .read(callProvider.notifier)
+          .endCall(duration: duration);
+
+      if (widget.userId != null) {
+        _signalingService.sendCallEnded(
+          receiverId: widget.userId!,
+          callId: currentCall.id,
+        );
+      }
+    }
+
+    await _callingService.dispose();
+
+    _signalingService.disconnect();
+
+    if (!mounted) return;
+
+    if (showEndedScreen) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => CallEndedScreen(
+            userName: widget.userName,
+            callDuration: duration,
+          ),
+        ),
+      );
+    }
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          message.replaceFirst(
+            'CallingException: ',
+            '',
+          ),
+        ),
+      ),
     );
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _callingService.dispose();
+    _signalingService.disconnect();
     super.dispose();
   }
 
@@ -59,20 +321,6 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
     return '$minutes:$seconds';
   }
 
-  void _endCall() {
-    _timer?.cancel();
-
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (_) => CallEndedScreen(
-          userName: widget.userName,
-          callDuration: _formattedTime,
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -80,7 +328,6 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // Top bar
             Padding(
               padding: const EdgeInsets.symmetric(
                 horizontal: 20,
@@ -113,7 +360,6 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
 
             const Spacer(),
 
-            // Avatar
             Container(
               height: 145,
               width: 145,
@@ -121,7 +367,8 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
                 color: AppColors.darkSurface,
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color: AppColors.primary.withOpacity(0.5),
+                  color:
+                      AppColors.primary.withOpacity(0.5),
                   width: 2,
                 ),
               ),
@@ -160,10 +407,16 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
 
             const SizedBox(height: 8),
 
-            const Text(
-              'Connected',
+            Text(
+              _isStarting
+                  ? 'Calling...'
+                  : _isConnected
+                      ? 'Connected'
+                      : 'Waiting for answer',
               style: TextStyle(
-                color: AppColors.online,
+                color: _isConnected
+                    ? AppColors.online
+                    : Colors.white70,
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
               ),
@@ -171,7 +424,6 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
 
             const Spacer(),
 
-            // Controls
             Container(
               margin: const EdgeInsets.symmetric(
                 horizontal: 25,
@@ -182,7 +434,8 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
               ),
               decoration: BoxDecoration(
                 color: AppColors.darkSurface,
-                borderRadius: BorderRadius.circular(25),
+                borderRadius:
+                    BorderRadius.circular(25),
               ),
               child: Row(
                 mainAxisAlignment:
@@ -192,28 +445,19 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
                     icon: _isMuted
                         ? Icons.mic_off_rounded
                         : Icons.mic_rounded,
-                    label: _isMuted ? 'Unmute' : 'Mute',
+                    label:
+                        _isMuted ? 'Unmute' : 'Mute',
                     active: _isMuted,
-                    onTap: () {
-                      setState(() {
-                        _isMuted = !_isMuted;
-                      });
-                    },
+                    onTap: _toggleMute,
                   ),
-
                   _CallControl(
                     icon: _isSpeakerOn
                         ? Icons.volume_up_rounded
                         : Icons.volume_down_rounded,
                     label: 'Speaker',
                     active: _isSpeakerOn,
-                    onTap: () {
-                      setState(() {
-                        _isSpeakerOn = !_isSpeakerOn;
-                      });
-                    },
+                    onTap: _toggleSpeaker,
                   ),
-
                   _CallControl(
                     icon: Icons.call_end_rounded,
                     label: 'End',
@@ -266,13 +510,13 @@ class _CallControl extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Color background = danger
+    final background = danger
         ? AppColors.danger
         : active
             ? Colors.white
             : const Color(0xFF334155);
 
-    final Color foreground = danger
+    final foreground = danger
         ? Colors.white
         : active
             ? AppColors.darkCall
