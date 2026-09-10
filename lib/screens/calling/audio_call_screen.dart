@@ -7,10 +7,12 @@ import 'call_ended_screen.dart';
 
 class AudioCallScreen extends StatefulWidget {
   final String userName;
+  final String? userId;
 
   const AudioCallScreen({
     super.key,
     this.userName = 'Sarah Johnson',
+    this.userId,
   });
 
   @override
@@ -48,8 +50,11 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
   }
 
   String get _formattedTime {
-    final minutes = (_seconds ~/ 60).toString().padLeft(2, '0');
-    final seconds = (_seconds % 60).toString().padLeft(2, '0');
+    final minutes =
+        (_seconds ~/ 60).toString().padLeft(2, '0');
+
+    final seconds =
+        (_seconds % 60).toString().padLeft(2, '0');
 
     return '$minutes:$seconds';
   }
@@ -168,7 +173,9 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
 
             // Controls
             Container(
-              margin: const EdgeInsets.symmetric(horizontal: 25),
+              margin: const EdgeInsets.symmetric(
+                horizontal: 25,
+              ),
               padding: const EdgeInsets.symmetric(
                 horizontal: 22,
                 vertical: 20,
@@ -225,10 +232,15 @@ class _AudioCallScreenState extends State<AudioCallScreen> {
   }
 
   String _initials(String name) {
-    final parts = name.trim().split(' ');
+    final parts = name
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((part) => part.isNotEmpty)
+        .toList();
 
     if (parts.length >= 2) {
-      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+      return '${parts[0][0]}${parts[1][0]}'
+          .toUpperCase();
     }
 
     return name.isNotEmpty

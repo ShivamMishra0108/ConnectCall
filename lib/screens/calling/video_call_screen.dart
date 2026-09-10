@@ -7,14 +7,17 @@ import 'call_ended_screen.dart';
 
 class VideoCallScreen extends StatefulWidget {
   final String userName;
+  final String? userId;
 
   const VideoCallScreen({
     super.key,
     this.userName = 'Sarah Johnson',
+    this.userId,
   });
 
   @override
-  State<VideoCallScreen> createState() => _VideoCallScreenState();
+  State<VideoCallScreen> createState() =>
+      _VideoCallScreenState();
 }
 
 class _VideoCallScreenState extends State<VideoCallScreen> {
@@ -48,8 +51,11 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   }
 
   String get _formattedTime {
-    final minutes = (_seconds ~/ 60).toString().padLeft(2, '0');
-    final seconds = (_seconds % 60).toString().padLeft(2, '0');
+    final minutes =
+        (_seconds ~/ 60).toString().padLeft(2, '0');
+
+    final seconds =
+        (_seconds % 60).toString().padLeft(2, '0');
 
     return '$minutes:$seconds';
   }
@@ -97,7 +103,8 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
               child: Container(
                 color: const Color(0xFF172033),
                 child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisAlignment:
+                      MainAxisAlignment.center,
                   children: [
                     if (!_isCameraOn)
                       Container(
@@ -126,7 +133,8 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                           color: AppColors.darkSurface,
                           shape: BoxShape.circle,
                           border: Border.all(
-                            color: AppColors.primary.withOpacity(0.5),
+                            color: AppColors.primary
+                                .withOpacity(0.5),
                             width: 2,
                           ),
                         ),
@@ -141,7 +149,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                           ),
                         ),
                       ),
+
                     const SizedBox(height: 22),
+
                     Text(
                       widget.userName,
                       style: const TextStyle(
@@ -150,7 +160,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                         fontWeight: FontWeight.w700,
                       ),
                     ),
+
                     const SizedBox(height: 7),
+
                     Text(
                       _formattedTime,
                       style: const TextStyle(
@@ -158,7 +170,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                         fontSize: 13,
                       ),
                     ),
+
                     const SizedBox(height: 7),
+
                     const Text(
                       'Connected',
                       style: TextStyle(
@@ -187,7 +201,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                       size: 30,
                     ),
                   ),
+
                   const Spacer(),
+
                   Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 14,
@@ -195,7 +211,8 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                     ),
                     decoration: BoxDecoration(
                       color: Colors.black.withOpacity(0.35),
-                      borderRadius: BorderRadius.circular(20),
+                      borderRadius:
+                          BorderRadius.circular(20),
                     ),
                     child: Text(
                       _formattedTime,
@@ -206,7 +223,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                       ),
                     ),
                   ),
+
                   const Spacer(),
+
                   const SizedBox(width: 48),
                 ],
               ),
@@ -221,21 +240,24 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                 width: 105,
                 decoration: BoxDecoration(
                   color: const Color(0xFF334155),
-                  borderRadius: BorderRadius.circular(18),
+                  borderRadius:
+                      BorderRadius.circular(18),
                   border: Border.all(
                     color: Colors.white24,
                     width: 1,
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.25),
+                      color:
+                          Colors.black.withOpacity(0.25),
                       blurRadius: 15,
                     ),
                   ],
                 ),
                 child: _isCameraOn
                     ? Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisAlignment:
+                            MainAxisAlignment.center,
                         children: [
                           const Icon(
                             Icons.person_rounded,
@@ -244,7 +266,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                           ),
                           const SizedBox(height: 5),
                           Text(
-                            _isFrontCamera ? 'Front' : 'Rear',
+                            _isFrontCamera
+                                ? 'Front'
+                                : 'Rear',
                             style: const TextStyle(
                               color: Colors.white70,
                               fontSize: 10,
@@ -253,7 +277,8 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                         ],
                       )
                     : const Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisAlignment:
+                            MainAxisAlignment.center,
                         children: [
                           Icon(
                             Icons.videocam_off_rounded,
@@ -284,17 +309,22 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                   vertical: 18,
                 ),
                 decoration: BoxDecoration(
-                  color: AppColors.darkSurface.withOpacity(0.95),
-                  borderRadius: BorderRadius.circular(28),
+                  color:
+                      AppColors.darkSurface.withOpacity(0.95),
+                  borderRadius:
+                      BorderRadius.circular(28),
                 ),
                 child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  mainAxisAlignment:
+                      MainAxisAlignment.spaceAround,
                   children: [
                     _VideoControl(
                       icon: _isMuted
                           ? Icons.mic_off_rounded
                           : Icons.mic_rounded,
-                      label: _isMuted ? 'Unmute' : 'Mute',
+                      label: _isMuted
+                          ? 'Unmute'
+                          : 'Mute',
                       active: _isMuted,
                       onTap: () {
                         setState(() {
@@ -302,11 +332,14 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                         });
                       },
                     ),
+
                     _VideoControl(
                       icon: _isCameraOn
                           ? Icons.videocam_rounded
                           : Icons.videocam_off_rounded,
-                      label: _isCameraOn ? 'Camera' : 'Camera off',
+                      label: _isCameraOn
+                          ? 'Camera'
+                          : 'Camera off',
                       active: !_isCameraOn,
                       onTap: () {
                         setState(() {
@@ -314,11 +347,14 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                         });
                       },
                     ),
+
                     _VideoControl(
-                      icon: Icons.flip_camera_ios_rounded,
+                      icon:
+                          Icons.flip_camera_ios_rounded,
                       label: 'Switch',
                       onTap: _switchCamera,
                     ),
+
                     _VideoControl(
                       icon: Icons.call_end_rounded,
                       label: 'End',
@@ -336,10 +372,15 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   }
 
   String _initials(String name) {
-    final parts = name.trim().split(' ');
+    final parts = name
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((part) => part.isNotEmpty)
+        .toList();
 
     if (parts.length >= 2) {
-      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+      return '${parts[0][0]}${parts[1][0]}'
+          .toUpperCase();
     }
 
     return name.isNotEmpty
