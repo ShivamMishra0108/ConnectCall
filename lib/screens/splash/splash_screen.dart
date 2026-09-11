@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/auth_provider.dart';
 import '../../core/theme/app_theme.dart';
+import '../../providers/incoming_call_provider.dart';
 import '../auth/login_screen.dart';
 import '../home/home_screen.dart';
 
@@ -10,12 +11,10 @@ class SplashScreen extends ConsumerStatefulWidget {
   const SplashScreen({super.key});
 
   @override
-  ConsumerState<SplashScreen> createState() =>
-      _SplashScreenState();
+  ConsumerState<SplashScreen> createState() => _SplashScreenState();
 }
 
-class _SplashScreenState
-    extends ConsumerState<SplashScreen>
+class _SplashScreenState extends ConsumerState<SplashScreen>
     with SingleTickerProviderStateMixin {
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
@@ -35,46 +34,37 @@ class _SplashScreenState
       curve: Curves.easeIn,
     );
 
-    _scaleAnimation = Tween<double>(
-      begin: 0.75,
-      end: 1.0,
-    ).animate(
-      CurvedAnimation(
-        parent: _animationController,
-        curve: Curves.easeOutBack,
-      ),
+    _scaleAnimation = Tween<double>(begin: 0.75, end: 1.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeOutBack),
     );
 
     _animationController.forward();
 
-    Timer(
-      const Duration(seconds: 2),
-      _checkAuthentication,
-    );
+    Timer(const Duration(seconds: 2), _checkAuthentication);
   }
 
   Future<void> _checkAuthentication() async {
     if (!mounted) return;
 
-    final storage = ref.read(storageServiceProvider);
-
-    final user = await storage.getLoggedInUser();
+    await ref.read(authProvider.notifier).restoreSession();
 
     if (!mounted) return;
 
-    if (user != null) {
+    final authState = ref.read(authProvider);
+
+    if (authState.isLoggedIn) {
+      await ref.read(incomingCallProvider).start();
+
+      if (!mounted) return;
+
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(
-          builder: (_) => HomeScreen(),
-        ),
+        MaterialPageRoute(builder: (_) => const HomeScreen()),
       );
     } else {
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(
-          builder: (_) => const LoginScreen(),
-        ),
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
       );
     }
   }
@@ -116,15 +106,12 @@ class _SplashScreenState
                       width: 100,
                       decoration: BoxDecoration(
                         color: Colors.white,
-                        borderRadius:
-                            BorderRadius.circular(28),
+                        borderRadius: BorderRadius.circular(28),
                         boxShadow: [
                           BoxShadow(
-                            color:
-                                Colors.black.withOpacity(0.15),
+                            color: Colors.black.withOpacity(0.15),
                             blurRadius: 30,
-                            offset:
-                                const Offset(0, 12),
+                            offset: const Offset(0, 12),
                           ),
                         ],
                       ),
@@ -152,10 +139,7 @@ class _SplashScreenState
                     const Text(
                       'Connect with anyone, anywhere.',
                       textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Colors.white70,
-                        fontSize: 15,
-                      ),
+                      style: TextStyle(color: Colors.white70, fontSize: 15),
                     ),
 
                     const SizedBox(height: 45),
@@ -165,10 +149,7 @@ class _SplashScreenState
                       width: 24,
                       child: CircularProgressIndicator(
                         strokeWidth: 2.5,
-                        valueColor:
-                            AlwaysStoppedAnimation<Color>(
-                          Colors.white,
-                        ),
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
                       ),
                     ),
                   ],

@@ -44,6 +44,20 @@ class AuthNotifier extends Notifier<AuthState> {
     return const AuthState();
   }
 
+  Future<void> restoreSession() async {
+  final user = await _storage.getLoggedInUser();
+
+  if (user == null) {
+    state = const AuthState();
+    return;
+  }
+
+  state = AuthState(
+    isLoggedIn: true,
+    currentUser: user.copyWith(online: true),
+  );
+}
+
   Future<String?> register({
     required UserModel user,
   }) async {

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/user_model.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/incoming_call_provider.dart';
 import '../../widgets/common_widgets.dart';
 import '../home/home_screen.dart';
 
@@ -10,12 +11,10 @@ class RegisterScreen extends ConsumerStatefulWidget {
   const RegisterScreen({super.key});
 
   @override
-  ConsumerState<RegisterScreen> createState() =>
-      _RegisterScreenState();
+  ConsumerState<RegisterScreen> createState() => _RegisterScreenState();
 }
 
-class _RegisterScreenState
-    extends ConsumerState<RegisterScreen> {
+class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   final nameController = TextEditingController();
   final emailController = TextEditingController();
   final phoneController = TextEditingController();
@@ -54,9 +53,7 @@ class _RegisterScreenState
     }
 
     if (password.length < 6) {
-      _showMessage(
-        'Password must be at least 6 characters.',
-      );
+      _showMessage('Password must be at least 6 characters.');
       return;
     }
 
@@ -81,9 +78,7 @@ class _RegisterScreenState
       online: true,
     );
 
-    final error = await ref
-        .read(authProvider.notifier)
-        .register(user: user);
+    final error = await ref.read(authProvider.notifier).register(user: user);
 
     if (!mounted) return;
 
@@ -96,11 +91,14 @@ class _RegisterScreenState
       return;
     }
 
+    // Start listening for incoming calls.
+    await ref.read(incomingCallProvider).start();
+
+    if (!mounted) return;
+
     Navigator.pushAndRemoveUntil(
       context,
-      MaterialPageRoute(
-        builder: (_) => HomeScreen(),
-      ),
+      MaterialPageRoute(builder: (_) => const HomeScreen()),
       (_) => false,
     );
   }
@@ -118,16 +116,13 @@ class _RegisterScreenState
       return parts.first[0].toUpperCase();
     }
 
-    return '${parts.first[0]}${parts.last[0]}'
-        .toUpperCase();
+    return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
   }
 
   void _showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-      ),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -143,17 +138,10 @@ class _RegisterScreenState
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Create Account'),
-      ),
+      appBar: AppBar(title: const Text('Create Account')),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(
-            24,
-            20,
-            24,
-            32,
-          ),
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -163,36 +151,28 @@ class _RegisterScreenState
 
               const Text(
                 'Create your account',
-                style: TextStyle(
-                  fontSize: 30,
-                  fontWeight: FontWeight.w800,
-                ),
+                style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800),
               ),
 
               const SizedBox(height: 8),
 
               const Text(
                 'Create an account to start connecting.',
-                style: TextStyle(
-                  color: Colors.blueGrey,
-                ),
+                style: TextStyle(color: Colors.blueGrey),
               ),
 
               const SizedBox(height: 30),
 
               const Text(
                 'Full name',
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: TextStyle(fontWeight: FontWeight.w700),
               ),
 
               const SizedBox(height: 8),
 
               TextField(
                 controller: nameController,
-                textCapitalization:
-                    TextCapitalization.words,
+                textCapitalization: TextCapitalization.words,
                 decoration: const InputDecoration(
                   hintText: 'Enter your full name',
                 ),
@@ -202,29 +182,22 @@ class _RegisterScreenState
 
               const Text(
                 'Email',
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: TextStyle(fontWeight: FontWeight.w700),
               ),
 
               const SizedBox(height: 8),
 
               TextField(
                 controller: emailController,
-                keyboardType:
-                    TextInputType.emailAddress,
-                decoration: const InputDecoration(
-                  hintText: 'you@example.com',
-                ),
+                keyboardType: TextInputType.emailAddress,
+                decoration: const InputDecoration(hintText: 'you@example.com'),
               ),
 
               const SizedBox(height: 18),
 
               const Text(
                 'Mobile number',
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: TextStyle(fontWeight: FontWeight.w700),
               ),
 
               const SizedBox(height: 8),
@@ -244,9 +217,7 @@ class _RegisterScreenState
 
               const Text(
                 'Password',
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: TextStyle(fontWeight: FontWeight.w700),
               ),
 
               const SizedBox(height: 8),
@@ -259,8 +230,7 @@ class _RegisterScreenState
                   suffixIcon: IconButton(
                     onPressed: () {
                       setState(() {
-                        obscurePassword =
-                            !obscurePassword;
+                        obscurePassword = !obscurePassword;
                       });
                     },
                     icon: Icon(
@@ -276,9 +246,7 @@ class _RegisterScreenState
 
               const Text(
                 'Confirm password',
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: TextStyle(fontWeight: FontWeight.w700),
               ),
 
               const SizedBox(height: 8),
@@ -291,8 +259,7 @@ class _RegisterScreenState
                   suffixIcon: IconButton(
                     onPressed: () {
                       setState(() {
-                        obscureConfirmPassword =
-                            !obscureConfirmPassword;
+                        obscureConfirmPassword = !obscureConfirmPassword;
                       });
                     },
                     icon: Icon(
@@ -307,11 +274,8 @@ class _RegisterScreenState
               const SizedBox(height: 28),
 
               PrimaryButton(
-                label: isLoading
-                    ? 'Creating Account...'
-                    : 'Create Account',
-                onPressed:
-                    isLoading ? null : register,
+                label: isLoading ? 'Creating Account...' : 'Create Account',
+                onPressed: isLoading ? null : register,
               ),
 
               const SizedBox(height: 22),
@@ -319,9 +283,7 @@ class _RegisterScreenState
               Center(
                 child: Wrap(
                   children: [
-                    const Text(
-                      'Already have an account? ',
-                    ),
+                    const Text('Already have an account? '),
                     GestureDetector(
                       onTap: () {
                         Navigator.pop(context);

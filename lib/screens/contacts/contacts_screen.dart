@@ -84,6 +84,7 @@ class _ContactsScreenState
       MaterialPageRoute(
         builder: (_) => AudioCallScreen(
           userName: user.name,
+          userId: user.id,
         ),
       ),
     );

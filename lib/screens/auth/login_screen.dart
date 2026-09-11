@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/auth_provider.dart';
+import '../../providers/incoming_call_provider.dart';
 import '../../widgets/common_widgets.dart';
 import '../home/home_screen.dart';
 import 'register_screen.dart';
@@ -19,14 +20,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   bool obscurePassword = true;
 
- Future<void> login() async {
+Future<void> login() async {
   final emailOrPhone = emailController.text.trim();
   final password = passwordController.text;
 
   if (emailOrPhone.isEmpty) {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Please enter your email or mobile number.'),
+        content: Text(
+          'Please enter your email or mobile number.',
+        ),
       ),
     );
     return;
@@ -35,16 +38,19 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   if (password.isEmpty) {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Please enter your password.'),
+        content: Text(
+          'Please enter your password.',
+        ),
       ),
     );
     return;
   }
 
-  final error = await ref.read(authProvider.notifier).login(
-        emailOrPhone: emailOrPhone,
-        password: password,
-      );
+  final error =
+      await ref.read(authProvider.notifier).login(
+            emailOrPhone: emailOrPhone,
+            password: password,
+          );
 
   if (!mounted) return;
 
@@ -57,14 +63,22 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     return;
   }
 
+  // Start listening for incoming calls.
+  await ref
+      .read(incomingCallProvider)
+      .start();
+
+  if (!mounted) return;
+
   Navigator.pushAndRemoveUntil(
     context,
     MaterialPageRoute(
-      builder: (_) => HomeScreen(),
+      builder: (_) => const HomeScreen(),
     ),
     (_) => false,
   );
 }
+
 
   @override
   void dispose() {
@@ -78,12 +92,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     return Scaffold(
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(
-            24,
-            48,
-            24,
-            24,
-          ),
+          padding: const EdgeInsets.fromLTRB(24, 48, 24, 24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -93,28 +102,21 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
               const Text(
                 'Welcome back',
-                style: TextStyle(
-                  fontSize: 30,
-                  fontWeight: FontWeight.w800,
-                ),
+                style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800),
               ),
 
               const SizedBox(height: 8),
 
               const Text(
                 'Sign in to continue your conversations.',
-                style: TextStyle(
-                  color: Colors.blueGrey,
-                ),
+                style: TextStyle(color: Colors.blueGrey),
               ),
 
               const SizedBox(height: 35),
 
               const Text(
                 'Email or phone',
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: TextStyle(fontWeight: FontWeight.w700),
               ),
 
               const SizedBox(height: 8),
@@ -122,18 +124,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               TextField(
                 controller: emailController,
                 keyboardType: TextInputType.emailAddress,
-                decoration: const InputDecoration(
-                  hintText: 'you@example.com',
-                ),
+                decoration: const InputDecoration(hintText: 'you@example.com'),
               ),
 
               const SizedBox(height: 18),
 
               const Text(
                 'Password',
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: TextStyle(fontWeight: FontWeight.w700),
               ),
 
               const SizedBox(height: 8),
@@ -168,27 +166,18 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
               const SizedBox(height: 10),
 
-              PrimaryButton(
-                label: 'Login',
-                onPressed: login,
-              ),
+              PrimaryButton(label: 'Login', onPressed: login),
 
               const SizedBox(height: 25),
 
               Row(
                 children: [
-                  const Expanded(
-                    child: Divider(),
-                  ),
+                  const Expanded(child: Divider()),
                   const Padding(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: 12,
-                    ),
+                    padding: EdgeInsets.symmetric(horizontal: 12),
                     child: Text('OR'),
                   ),
-                  const Expanded(
-                    child: Divider(),
-                  ),
+                  const Expanded(child: Divider()),
                 ],
               ),
 
@@ -196,13 +185,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
               OutlinedButton.icon(
                 onPressed: login,
-                icon: const Icon(
-                  Icons.g_mobiledata_rounded,
-                  size: 28,
-                ),
-                label: const Text(
-                  'Continue with Google',
-                ),
+                icon: const Icon(Icons.g_mobiledata_rounded, size: 28),
+                label: const Text('Continue with Google'),
                 style: OutlinedButton.styleFrom(
                   minimumSize: const Size.fromHeight(52),
                   shape: RoundedRectangleBorder(
@@ -216,9 +200,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               Center(
                 child: Wrap(
                   children: [
-                    const Text(
-                      "Don't have an account? ",
-                    ),
+                    const Text("Don't have an account? "),
                     GestureDetector(
                       onTap: () {
                         Navigator.push(

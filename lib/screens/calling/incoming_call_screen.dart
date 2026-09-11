@@ -1,161 +1,289 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/services/calling_service.dart';
+import '../../core/services/signaling_service.dart';
 import '../../core/theme/app_theme.dart';
+import '../../models/call_model.dart';
+import '../../providers/auth_provider.dart';
+import '../../providers/call_provider.dart';
 import 'audio_call_screen.dart';
 import 'video_call_screen.dart';
-import '../home/home_screen.dart';
 
-class IncomingCallScreen extends StatelessWidget {
-  final String callerName;
-  final bool isVideoCall;
+class IncomingCallScreen extends ConsumerStatefulWidget {
+  final CallModel call;
 
   const IncomingCallScreen({
     super.key,
-    this.callerName = 'Sarah Johnson',
-    this.isVideoCall = true,
+    required this.call,
   });
 
-  void _acceptCall(BuildContext context) {
+  @override
+  ConsumerState<IncomingCallScreen> createState() =>
+      _IncomingCallScreenState();
+}
+
+class _IncomingCallScreenState
+    extends ConsumerState<IncomingCallScreen> {
+  final CallingService _callingService = CallingService();
+  final SignalingService _signalingService =
+      SignalingService();
+
+  bool _isProcessing = false;
+
+  @override
+  void initState() {
+    super.initState();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(callProvider.notifier).receiveIncomingCall(
+            call: widget.call,
+          );
+    });
+  }
+
+Future<void> _acceptCall() async {
+  if (_isProcessing) return;
+
+  setState(() {
+    _isProcessing = true;
+  });
+
+  ref.read(callProvider.notifier).acceptCall();
+
+  if (!mounted) return;
+
+  final isVideo =
+      widget.call.type == CallType.video;
+
+  if (isVideo) {
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(
-        builder: (_) => isVideoCall
-            ? VideoCallScreen(userName: callerName)
-            : AudioCallScreen(userName: callerName),
+        builder: (_) => VideoCallScreen(
+          userName: widget.call.callerName,
+          userId: widget.call.callerId,
+          callId: widget.call.id,
+          isIncoming: true,
+        ),
       ),
     );
-  }
-
-  void _declineCall(BuildContext context) {
-    Navigator.pushAndRemoveUntil(
+  } else {
+    Navigator.pushReplacement(
       context,
       MaterialPageRoute(
-        builder: (_) => const HomeScreen(),
+        builder: (_) => AudioCallScreen(
+          userName: widget.call.callerName,
+          userId: widget.call.callerId,
+          callId: widget.call.id,
+          isIncoming: true,
+        ),
       ),
-      (route) => false,
     );
   }
+}
+  Future<void> _declineCall() async {
+    if (_isProcessing) return;
 
-  String _initials(String name) {
-    final parts = name.trim().split(' ');
+    setState(() {
+      _isProcessing = true;
+    });
 
-    if (parts.length >= 2) {
-      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    final currentUser =
+        ref.read(authProvider).currentUser;
+
+    if (currentUser != null) {
+      await _signalingService.connect(
+        userId: currentUser.id,
+      );
+
+      _signalingService.sendCallDeclined(
+        receiverId: widget.call.callerId,
+        callId: widget.call.id,
+      );
     }
 
-    return name.isNotEmpty
-        ? name.substring(0, 1).toUpperCase()
+    ref.read(callProvider.notifier).declineCall();
+    ref.read(callProvider.notifier).clearCall();
+
+    if (!mounted) return;
+
+    Navigator.pop(context);
+  }
+
+  String get _initials {
+    final parts = widget.call.callerName
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((part) => part.isNotEmpty)
+        .toList();
+
+    if (parts.length >= 2) {
+      return '${parts[0][0]}${parts[1][0]}'
+          .toUpperCase();
+    }
+
+    return widget.call.callerName.isNotEmpty
+        ? widget.call.callerName[0].toUpperCase()
         : 'U';
   }
 
   @override
+  void dispose() {
+    _callingService.dispose();
+    _signalingService.disconnect();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final isVideo =
+        widget.call.type == CallType.video;
+
     return Scaffold(
       backgroundColor: AppColors.darkCall,
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: 28,
-            vertical: 35,
-          ),
-          child: Column(
-            children: [
-              const Spacer(),
+        child: Column(
+          children: [
+            const Spacer(),
 
-              Text(
-                isVideoCall ? 'Incoming Video Call' : 'Incoming Audio Call',
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w500,
-                ),
+            const Text(
+              'Incoming Call',
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 15,
+                fontWeight: FontWeight.w500,
               ),
+            ),
 
-              const SizedBox(height: 35),
+            const SizedBox(height: 35),
 
-              Container(
-                height: 145,
-                width: 145,
-                decoration: BoxDecoration(
-                  color: AppColors.darkSurface,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: AppColors.primary.withOpacity(0.55),
-                    width: 2,
+            Container(
+              height: 145,
+              width: 145,
+              decoration: BoxDecoration(
+                color: AppColors.darkSurface,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color:
+                      AppColors.primary.withOpacity(0.6),
+                  width: 2,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color:
+                        AppColors.primary.withOpacity(0.25),
+                    blurRadius: 35,
+                    spreadRadius: 5,
+                  ),
+                ],
+              ),
+              child: Center(
+                child: Text(
+                  _initials,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 42,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
-                child: Center(
-                  child: Text(
-                    _initials(callerName),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 40,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
               ),
+            ),
 
-              const SizedBox(height: 28),
+            const SizedBox(height: 28),
 
-              Text(
-                callerName,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 27,
-                  fontWeight: FontWeight.w700,
-                ),
+            Text(
+              widget.call.callerName,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 27,
+                fontWeight: FontWeight.w700,
               ),
+            ),
 
-              const SizedBox(height: 10),
+            const SizedBox(height: 10),
 
-              const Text(
-                'Calling you...',
-                style: TextStyle(
+            Row(
+              mainAxisAlignment:
+                  MainAxisAlignment.center,
+              children: [
+                Icon(
+                  isVideo
+                      ? Icons.videocam_rounded
+                      : Icons.phone_rounded,
                   color: Colors.white60,
-                  fontSize: 14,
+                  size: 18,
                 ),
+                const SizedBox(width: 7),
+                Text(
+                  isVideo ? 'Video Call' : 'Audio Call',
+                  style: const TextStyle(
+                    color: Colors.white60,
+                    fontSize: 14,
+                  ),
+                ),
+              ],
+            ),
+
+            const Spacer(),
+
+            Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 55,
+                vertical: 35,
               ),
-
-              const Spacer(),
-
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              child: Row(
+                mainAxisAlignment:
+                    MainAxisAlignment.spaceBetween,
                 children: [
-                  _IncomingCallButton(
+                  _IncomingControl(
                     icon: Icons.call_end_rounded,
                     label: 'Decline',
                     background: AppColors.danger,
-                    onTap: () => _declineCall(context),
+                    onTap: _declineCall,
                   ),
-                  _IncomingCallButton(
-                    icon: isVideoCall
+                  _IncomingControl(
+                    icon: isVideo
                         ? Icons.videocam_rounded
                         : Icons.call_rounded,
                     label: 'Accept',
                     background: AppColors.online,
-                    onTap: () => _acceptCall(context),
+                    onTap: _acceptCall,
                   ),
                 ],
               ),
+            ),
 
-              const SizedBox(height: 35),
-            ],
-          ),
+            if (_isProcessing)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 20),
+                child: SizedBox(
+                  height: 22,
+                  width: 22,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor:
+                        AlwaysStoppedAnimation<Color>(
+                      Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );
   }
 }
 
-class _IncomingCallButton extends StatelessWidget {
+class _IncomingControl extends StatelessWidget {
   final IconData icon;
   final String label;
   final Color background;
   final VoidCallback onTap;
 
-  const _IncomingCallButton({
+  const _IncomingControl({
     required this.icon,
     required this.label,
     required this.background,
@@ -174,18 +302,11 @@ class _IncomingCallButton extends StatelessWidget {
             decoration: BoxDecoration(
               color: background,
               shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: background.withOpacity(0.3),
-                  blurRadius: 20,
-                  spreadRadius: 3,
-                ),
-              ],
             ),
             child: Icon(
               icon,
               color: Colors.white,
-              size: 28,
+              size: 29,
             ),
           ),
         ),
