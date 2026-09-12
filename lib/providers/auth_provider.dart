@@ -1,4 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../core/services/api_service.dart';
 import '../core/services/storage_service.dart';
 import '../models/user_model.dart';
 
@@ -44,19 +46,27 @@ class AuthNotifier extends Notifier<AuthState> {
     return const AuthState();
   }
 
-  Future<void> restoreSession() async {
-  final user = await _storage.getLoggedInUser();
+  // ----------------------------------------------------------
+  // RESTORE SESSION
+  // ----------------------------------------------------------
 
-  if (user == null) {
-    state = const AuthState();
-    return;
+  Future<void> restoreSession() async {
+    final user = await _storage.getLoggedInUser();
+
+    if (user == null) {
+      state = const AuthState();
+      return;
+    }
+
+    state = AuthState(
+      isLoggedIn: true,
+      currentUser: user.copyWith(online: true),
+    );
   }
 
-  state = AuthState(
-    isLoggedIn: true,
-    currentUser: user.copyWith(online: true),
-  );
-}
+  // ----------------------------------------------------------
+  // REGISTER
+  // ----------------------------------------------------------
 
   Future<String?> register({
     required UserModel user,
@@ -65,45 +75,60 @@ class AuthNotifier extends Notifier<AuthState> {
       isLoading: true,
     );
 
-    final users = await _storage.getUsers();
-
-    final emailExists = users.any(
-      (existingUser) =>
-          existingUser.email.toLowerCase() ==
-          user.email.toLowerCase(),
-    );
-
-    if (emailExists) {
-      state = const AuthState(
-        errorMessage: 'Email is already registered.',
+    try {
+      final response = await ApiService.register(
+        name: user.name,
+        email: user.email,
+        phoneNumber: user.phoneNumber,
+        password: user.password,
       );
 
-      return 'Email is already registered.';
-    }
+      if (response['success'] != true) {
+        final message =
+            response['message'] ?? 'Registration failed.';
 
-    final phoneExists = users.any(
-      (existingUser) =>
-          existingUser.phoneNumber == user.phoneNumber,
-    );
+        state = AuthState(
+          errorMessage: message,
+        );
 
-    if (phoneExists) {
-      state = const AuthState(
-        errorMessage: 'Mobile number is already registered.',
+        return message;
+      }
+
+      final serverUser = response['user'];
+
+      final registeredUser = UserModel(
+        id: serverUser['_id'].toString(),
+        name: serverUser['name'] ?? user.name,
+        email: serverUser['email'] ?? user.email,
+        phoneNumber:
+            serverUser['phoneNumber'] ?? user.phoneNumber,
+        password: user.password,
+        initials:
+            serverUser['initials'] ?? user.initials,
+        online: true,
       );
 
-      return 'Mobile number is already registered.';
+      await _storage.saveLoggedInUser(registeredUser);
+
+      state = AuthState(
+        isLoggedIn: true,
+        currentUser: registeredUser,
+      );
+
+      return null;
+    } catch (e) {
+      state = const AuthState(
+        errorMessage:
+            'Unable to connect to the server.',
+      );
+
+      return 'Unable to connect to the server.';
     }
-
-    await _storage.saveUser(user);
-    await _storage.saveLoggedInUser(user);
-
-    state = AuthState(
-      isLoggedIn: true,
-      currentUser: user,
-    );
-
-    return null;
   }
+
+  // ----------------------------------------------------------
+  // LOGIN
+  // ----------------------------------------------------------
 
   Future<String?> login({
     required String emailOrPhone,
@@ -113,32 +138,71 @@ class AuthNotifier extends Notifier<AuthState> {
       isLoading: true,
     );
 
-    final user = await _storage.findUser(
-      emailOrPhone: emailOrPhone.trim(),
-      password: password,
-    );
+    try {
+      String email = emailOrPhone.trim();
 
-    if (user == null) {
-      state = const AuthState(
-        errorMessage: 'Invalid email/mobile number or password.',
+      // Current backend login uses email.
+      if (!email.contains('@')) {
+        state = const AuthState(
+          errorMessage:
+              'Please login using your registered email.',
+        );
+
+        return 'Please login using your registered email.';
+      }
+
+      final response = await ApiService.login(
+        email: email,
+        password: password,
       );
 
-      return 'Invalid email/mobile number or password.';
+      if (response['success'] != true) {
+        final message =
+            response['message'] ??
+                'Invalid email or password.';
+
+        state = AuthState(
+          errorMessage: message,
+        );
+
+        return message;
+      }
+
+      final serverUser = response['user'];
+
+      final loggedInUser = UserModel(
+        id: serverUser['_id'].toString(),
+        name: serverUser['name'] ?? '',
+        email: serverUser['email'] ?? '',
+        phoneNumber:
+            serverUser['phoneNumber'] ?? '',
+        password: password,
+        initials:
+            serverUser['initials'] ?? '',
+        online: true,
+      );
+
+      await _storage.saveLoggedInUser(loggedInUser);
+
+      state = AuthState(
+        isLoggedIn: true,
+        currentUser: loggedInUser,
+      );
+
+      return null;
+    } catch (e) {
+      state = const AuthState(
+        errorMessage:
+            'Unable to connect to the server.',
+      );
+
+      return 'Unable to connect to the server.';
     }
-
-    final loggedInUser = user.copyWith(
-      online: true,
-    );
-
-    await _storage.saveLoggedInUser(loggedInUser);
-
-    state = AuthState(
-      isLoggedIn: true,
-      currentUser: loggedInUser,
-    );
-
-    return null;
   }
+
+  // ----------------------------------------------------------
+  // LOGOUT
+  // ----------------------------------------------------------
 
   Future<void> logout() async {
     await _storage.clearLoggedInUser();

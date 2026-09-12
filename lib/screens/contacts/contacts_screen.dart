@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../core/services/api_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../models/user_model.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/incoming_call_provider.dart';
 import '../calling/audio_call_screen.dart';
 import '../calling/video_call_screen.dart';
 import '../profile/user_profile_screen.dart';
@@ -21,51 +24,147 @@ class _ContactsScreenState
       TextEditingController();
 
   String _searchQuery = '';
+
   List<UserModel> _users = [];
+
+  Set<String> _onlineUserIds = {};
+
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
+
     _loadContacts();
-  }
 
-  Future<void> _loadContacts() async {
-    final storage = ref.read(storageServiceProvider);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(incomingCallProvider).listenForOnlineUsers(
+        (onlineIds) {
+          if (!mounted) return;
 
-    final users = await storage.getUsers();
-    final currentUser = ref.read(authProvider).currentUser;
+          setState(() {
+            _onlineUserIds = onlineIds.toSet();
 
-    if (!mounted) return;
-
-    setState(() {
-      _users = users.where((user) {
-        return user.id != currentUser?.id;
-      }).toList();
-
-      _isLoading = false;
+            // Update online status of already loaded users
+            _users = _users.map((user) {
+              return user.copyWith(
+                online: _onlineUserIds.contains(user.id),
+              );
+            }).toList();
+          });
+        },
+      );
     });
   }
 
-  @override
-  void dispose() {
-    _searchController.dispose();
-    super.dispose();
+  // ============================================================
+  // LOAD CONTACTS FROM BACKEND
+  // ============================================================
+
+  Future<void> _loadContacts() async {
+    try {
+      final response = await ApiService.getUsers();
+
+      if (!mounted) return;
+
+      if (response['success'] != true) {
+        setState(() {
+          _users = [];
+          _isLoading = false;
+        });
+
+        _showMessage(
+          response['message']?.toString() ??
+              'Failed to load contacts.',
+        );
+
+        return;
+      }
+
+      final currentUser =
+          ref.read(authProvider).currentUser;
+
+      final List<dynamic> usersJson =
+          response['users'] ?? [];
+
+      final users = usersJson
+          .map(
+            (json) => UserModel.fromJson(
+              Map<String, dynamic>.from(json),
+            ),
+          )
+          .where((user) {
+            // Do not show the logged-in user
+            return user.id != currentUser?.id;
+          })
+          .map(
+            (user) => user.copyWith(
+              // Use real-time Socket.IO status
+              online: _onlineUserIds.contains(user.id),
+            ),
+          )
+          .toList();
+
+      setState(() {
+        _users = users;
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        _users = [];
+        _isLoading = false;
+      });
+
+      _showMessage(
+        'Unable to connect to the server.',
+      );
+
+      debugPrint(
+        'Load contacts error: $e',
+      );
+    }
   }
 
+  // ============================================================
+  // MESSAGE
+  // ============================================================
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+      ),
+    );
+  }
+
+  // ============================================================
+  // SEARCH
+  // ============================================================
+
   List<UserModel> get _filteredContacts {
-    final query = _searchQuery.trim().toLowerCase();
+    final query =
+        _searchQuery.trim().toLowerCase();
 
     if (query.isEmpty) {
       return _users;
     }
 
     return _users.where((user) {
-      return user.name.toLowerCase().contains(query) ||
-          user.email.toLowerCase().contains(query) ||
+      return user.name
+              .toLowerCase()
+              .contains(query) ||
+          user.email
+              .toLowerCase()
+              .contains(query) ||
           user.phoneNumber.contains(query);
     }).toList();
   }
+
+  // ============================================================
+  // PROFILE
+  // ============================================================
 
   void _openProfile(UserModel user) {
     Navigator.push(
@@ -77,6 +176,10 @@ class _ContactsScreenState
       ),
     );
   }
+
+  // ============================================================
+  // AUDIO CALL
+  // ============================================================
 
   void _openAudioCall(UserModel user) {
     Navigator.push(
@@ -90,6 +193,10 @@ class _ContactsScreenState
     );
   }
 
+  // ============================================================
+  // VIDEO CALL
+  // ============================================================
+
   void _openVideoCall(UserModel user) {
     Navigator.push(
       context,
@@ -102,6 +209,16 @@ class _ContactsScreenState
   }
 
   @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  // ============================================================
+  // BUILD
+  // ============================================================
+
+  @override
   Widget build(BuildContext context) {
     final contacts = _filteredContacts;
 
@@ -110,7 +227,10 @@ class _ContactsScreenState
       body: SafeArea(
         child: Column(
           children: [
-            // App bar
+            // ==================================================
+            // APP BAR
+            // ==================================================
+
             Padding(
               padding: const EdgeInsets.fromLTRB(
                 20,
@@ -136,7 +256,8 @@ class _ContactsScreenState
                     width: 42,
                     decoration: BoxDecoration(
                       color: AppColors.surface,
-                      borderRadius: BorderRadius.circular(13),
+                      borderRadius:
+                          BorderRadius.circular(13),
                       border: Border.all(
                         color: AppColors.border,
                       ),
@@ -157,16 +278,21 @@ class _ContactsScreenState
 
             const SizedBox(height: 20),
 
-            // Search
+            // ==================================================
+            // SEARCH
+            // ==================================================
+
             Padding(
-              padding: const EdgeInsets.symmetric(
+              padding:
+                  const EdgeInsets.symmetric(
                 horizontal: 20,
               ),
               child: Container(
                 height: 52,
                 decoration: BoxDecoration(
                   color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius:
+                      BorderRadius.circular(14),
                   border: Border.all(
                     color: AppColors.border,
                   ),
@@ -179,31 +305,41 @@ class _ContactsScreenState
                     });
                   },
                   decoration: InputDecoration(
-                    hintText: 'Search contacts...',
-                    hintStyle: const TextStyle(
-                      color: AppColors.secondaryText,
+                    hintText:
+                        'Search contacts...',
+                    hintStyle:
+                        const TextStyle(
+                      color:
+                          AppColors.secondaryText,
                       fontSize: 14,
                     ),
-                    prefixIcon: const Icon(
+                    prefixIcon:
+                        const Icon(
                       Icons.search_rounded,
-                      color: AppColors.secondaryText,
+                      color:
+                          AppColors.secondaryText,
                     ),
-                    suffixIcon: _searchQuery.isNotEmpty
-                        ? IconButton(
-                            onPressed: () {
-                              _searchController.clear();
+                    suffixIcon:
+                        _searchQuery.isNotEmpty
+                            ? IconButton(
+                                onPressed: () {
+                                  _searchController
+                                      .clear();
 
-                              setState(() {
-                                _searchQuery = '';
-                              });
-                            },
-                            icon: const Icon(
-                              Icons.close_rounded,
-                              color:
-                                  AppColors.secondaryText,
-                            ),
-                          )
-                        : null,
+                                  setState(() {
+                                    _searchQuery =
+                                        '';
+                                  });
+                                },
+                                icon:
+                                    const Icon(
+                                  Icons
+                                      .close_rounded,
+                                  color: AppColors
+                                      .secondaryText,
+                                ),
+                              )
+                            : null,
                     border: InputBorder.none,
                     contentPadding:
                         const EdgeInsets.symmetric(
@@ -216,19 +352,26 @@ class _ContactsScreenState
 
             const SizedBox(height: 22),
 
-            // Contact count
+            // ==================================================
+            // CONTACT COUNT
+            // ==================================================
+
             Padding(
-              padding: const EdgeInsets.symmetric(
+              padding:
+                  const EdgeInsets.symmetric(
                 horizontal: 20,
               ),
               child: Row(
                 children: [
                   Text(
                     '${contacts.length} contacts',
-                    style: const TextStyle(
-                      color: AppColors.secondaryText,
+                    style:
+                        const TextStyle(
+                      color: AppColors
+                          .secondaryText,
                       fontSize: 13,
-                      fontWeight: FontWeight.w500,
+                      fontWeight:
+                          FontWeight.w500,
                     ),
                   ),
                 ],
@@ -237,38 +380,54 @@ class _ContactsScreenState
 
             const SizedBox(height: 10),
 
-            // Contacts
+            // ==================================================
+            // CONTACT LIST
+            // ==================================================
+
             Expanded(
               child: _isLoading
                   ? const Center(
-                      child: CircularProgressIndicator(
-                        color: AppColors.primary,
+                      child:
+                          CircularProgressIndicator(
+                        color:
+                            AppColors.primary,
                       ),
                     )
                   : contacts.isEmpty
                       ? _EmptyContacts(
-                          searchQuery: _searchQuery,
+                          searchQuery:
+                              _searchQuery,
                         )
                       : ListView.builder(
                           padding:
-                              const EdgeInsets.fromLTRB(
+                              const EdgeInsets
+                                  .fromLTRB(
                             20,
                             4,
                             20,
                             20,
                           ),
-                          itemCount: contacts.length,
-                          itemBuilder: (context, index) {
-                            final user = contacts[index];
+                          itemCount:
+                              contacts.length,
+                          itemBuilder:
+                              (context, index) {
+                            final user =
+                                contacts[index];
 
                             return _ContactTile(
                               user: user,
                               onProfileTap: () =>
-                                  _openProfile(user),
+                                  _openProfile(
+                                user,
+                              ),
                               onAudioTap: () =>
-                                  _openAudioCall(user),
+                                  _openAudioCall(
+                                user,
+                              ),
                               onVideoTap: () =>
-                                  _openVideoCall(user),
+                                  _openVideoCall(
+                                user,
+                              ),
                             );
                           },
                         ),
@@ -280,8 +439,14 @@ class _ContactsScreenState
   }
 }
 
-class _ContactTile extends StatelessWidget {
+// ================================================================
+// CONTACT TILE
+// ================================================================
+
+class _ContactTile
+    extends StatelessWidget {
   final UserModel user;
+
   final VoidCallback onProfileTap;
   final VoidCallback onAudioTap;
   final VoidCallback onVideoTap;
@@ -295,23 +460,27 @@ class _ContactTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final status = user.online
-        ? 'Online'
-        : 'Offline';
+    final status =
+        user.online ? 'Online' : 'Offline';
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 10),
+      margin:
+          const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(13),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius:
+            BorderRadius.circular(16),
         border: Border.all(
           color: AppColors.border,
         ),
       ),
       child: Row(
         children: [
-          // Avatar
+          // ======================================================
+          // AVATAR
+          // ======================================================
+
           GestureDetector(
             onTap: onProfileTap,
             child: Stack(
@@ -319,22 +488,28 @@ class _ContactTile extends StatelessWidget {
                 Container(
                   height: 50,
                   width: 50,
-                  decoration: BoxDecoration(
-                    color:
-                        AppColors.primary.withOpacity(0.10),
+                  decoration:
+                      BoxDecoration(
+                    color: AppColors.primary
+                        .withOpacity(0.10),
                     shape: BoxShape.circle,
                   ),
                   child: Center(
                     child: Text(
                       user.initials,
-                      style: const TextStyle(
-                        color: AppColors.primary,
+                      style:
+                          const TextStyle(
+                        color:
+                            AppColors.primary,
                         fontSize: 14,
-                        fontWeight: FontWeight.w700,
+                        fontWeight:
+                            FontWeight.w700,
                       ),
                     ),
                   ),
                 ),
+
+                // Online indicator
                 if (user.online)
                   Positioned(
                     right: 0,
@@ -342,11 +517,16 @@ class _ContactTile extends StatelessWidget {
                     child: Container(
                       height: 14,
                       width: 14,
-                      decoration: BoxDecoration(
-                        color: AppColors.online,
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: AppColors.surface,
+                      decoration:
+                          BoxDecoration(
+                        color:
+                            AppColors.online,
+                        shape:
+                            BoxShape.circle,
+                        border:
+                            Border.all(
+                          color:
+                              AppColors.surface,
                           width: 2,
                         ),
                       ),
@@ -358,7 +538,10 @@ class _ContactTile extends StatelessWidget {
 
           const SizedBox(width: 12),
 
-          // Name + status
+          // ======================================================
+          // NAME + STATUS
+          // ======================================================
+
           Expanded(
             child: GestureDetector(
               onTap: onProfileTap,
@@ -369,20 +552,27 @@ class _ContactTile extends StatelessWidget {
                   Text(
                     user.name,
                     maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: AppColors.text,
+                    overflow:
+                        TextOverflow.ellipsis,
+                    style:
+                        const TextStyle(
+                      color:
+                          AppColors.text,
                       fontSize: 14,
-                      fontWeight: FontWeight.w600,
+                      fontWeight:
+                          FontWeight.w600,
                     ),
                   ),
+
                   const SizedBox(height: 5),
+
                   Text(
                     status,
                     style: TextStyle(
                       color: user.online
                           ? AppColors.online
-                          : AppColors.secondaryText,
+                          : AppColors
+                              .secondaryText,
                       fontSize: 11,
                     ),
                   ),
@@ -391,7 +581,10 @@ class _ContactTile extends StatelessWidget {
             ),
           ),
 
-          // Audio
+          // ======================================================
+          // AUDIO CALL
+          // ======================================================
+
           _CallIconButton(
             icon: Icons.call_rounded,
             onTap: onAudioTap,
@@ -399,7 +592,10 @@ class _ContactTile extends StatelessWidget {
 
           const SizedBox(width: 5),
 
-          // Video
+          // ======================================================
+          // VIDEO CALL
+          // ======================================================
+
           _CallIconButton(
             icon: Icons.videocam_rounded,
             onTap: onVideoTap,
@@ -410,7 +606,12 @@ class _ContactTile extends StatelessWidget {
   }
 }
 
-class _CallIconButton extends StatelessWidget {
+// ================================================================
+// CALL ICON BUTTON
+// ================================================================
+
+class _CallIconButton
+    extends StatelessWidget {
   final IconData icon;
   final VoidCallback onTap;
 
@@ -422,11 +623,14 @@ class _CallIconButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: AppColors.primary.withOpacity(0.10),
-      borderRadius: BorderRadius.circular(11),
+      color: AppColors.primary
+          .withOpacity(0.10),
+      borderRadius:
+          BorderRadius.circular(11),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(11),
+        borderRadius:
+            BorderRadius.circular(11),
         child: SizedBox(
           height: 38,
           width: 38,
@@ -441,7 +645,12 @@ class _CallIconButton extends StatelessWidget {
   }
 }
 
-class _EmptyContacts extends StatelessWidget {
+// ================================================================
+// EMPTY CONTACTS
+// ================================================================
+
+class _EmptyContacts
+    extends StatelessWidget {
   final String searchQuery;
 
   const _EmptyContacts({
@@ -452,7 +661,8 @@ class _EmptyContacts extends StatelessWidget {
   Widget build(BuildContext context) {
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(30),
+        padding:
+            const EdgeInsets.all(30),
         child: Column(
           mainAxisAlignment:
               MainAxisAlignment.center,
@@ -461,33 +671,43 @@ class _EmptyContacts extends StatelessWidget {
               height: 70,
               width: 70,
               decoration: BoxDecoration(
-                color:
-                    AppColors.primary.withOpacity(0.10),
+                color: AppColors.primary
+                    .withOpacity(0.10),
                 shape: BoxShape.circle,
               ),
               child: const Icon(
-                Icons.person_search_rounded,
+                Icons
+                    .person_search_rounded,
                 size: 32,
-                color: AppColors.primary,
+                color:
+                    AppColors.primary,
               ),
             ),
+
             const SizedBox(height: 18),
+
             const Text(
               'No contacts found',
               style: TextStyle(
                 color: AppColors.text,
                 fontSize: 17,
-                fontWeight: FontWeight.w700,
+                fontWeight:
+                    FontWeight.w700,
               ),
             ),
+
             const SizedBox(height: 7),
+
             Text(
               searchQuery.isEmpty
                   ? 'Create another account to see contacts here.'
                   : 'Try searching for a different name.',
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: AppColors.secondaryText,
+              textAlign:
+                  TextAlign.center,
+              style:
+                  const TextStyle(
+                color:
+                    AppColors.secondaryText,
                 fontSize: 13,
                 height: 1.5,
               ),
@@ -498,4 +718,3 @@ class _EmptyContacts extends StatelessWidget {
     );
   }
 }
-

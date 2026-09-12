@@ -5,6 +5,9 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 class SignalingService {
   io.Socket? _socket;
   bool _isConnected = false;
+    List<String> _onlineUserIds = [];
+
+  List<String> get onlineUserIds => _onlineUserIds;
 
   // Chrome running on the same PC as the Node.js server.
   static const String serverUrl = 'http://localhost:3000';
@@ -434,6 +437,41 @@ class SignalingService {
         }
       },
     );
+  }
+
+    // ============================================================
+  // ONLINE USERS
+  // ============================================================
+
+    void onOnlineUsers(
+    Function(List<String>) callback,
+  ) {
+    _socket?.off('online-users');
+
+    _socket?.on(
+      'online-users',
+      (data) {
+        print(
+          'Online users received: $data',
+        );
+
+        if (data is List) {
+          _onlineUserIds =
+              data.map((id) => id.toString()).toList();
+
+          callback(
+            List<String>.from(_onlineUserIds),
+          );
+        }
+      },
+    );
+
+    // Immediately provide the latest known state.
+    if (_onlineUserIds.isNotEmpty) {
+      callback(
+        List<String>.from(_onlineUserIds),
+      );
+    }
   }
 
   // ============================================================

@@ -92,6 +92,12 @@ class IncomingCallListener {
     );
   }
 
+    void listenForOnlineUsers(
+    Function(List<String>) callback,
+  ) {
+    _signalingService.onOnlineUsers(callback);
+  }
+
 
 }
 

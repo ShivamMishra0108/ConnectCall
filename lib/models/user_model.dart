@@ -56,14 +56,23 @@ class UserModel {
 
   factory UserModel.fromJson(Map<String, dynamic> json) {
     return UserModel(
-      id: json['id'] as String,
-      name: json['name'] as String,
-      email: json['email'] as String,
-      phoneNumber: json['phoneNumber'] as String,
-      password: json['password'] as String,
-      profileImage: json['profileImage'] as String?,
-      online: json['online'] as bool? ?? false,
-      initials: json['initials'] as String,
+      // MongoDB sends "_id", local storage uses "id"
+      id: (json['_id'] ?? json['id'] ?? '').toString(),
+
+      name: (json['name'] ?? '').toString(),
+
+      email: (json['email'] ?? '').toString(),
+
+      phoneNumber: (json['phoneNumber'] ?? '').toString(),
+
+      // GET /api/users does not return password
+      password: (json['password'] ?? '').toString(),
+
+      profileImage: json['profileImage']?.toString(),
+
+      online: json['online'] == true,
+
+      initials: (json['initials'] ?? '').toString(),
     );
   }
 }
