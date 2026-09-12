@@ -92,10 +92,7 @@ class IncomingCallListener {
     );
   }
 
-  void dispose() {
-    _signalingService.disconnect();
-    _started = false;
-  }
+
 }
 
 final navigatorKeyProvider =

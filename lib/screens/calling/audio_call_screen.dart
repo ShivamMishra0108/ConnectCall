@@ -27,17 +27,13 @@ class AudioCallScreen extends ConsumerStatefulWidget {
   });
 
   @override
-  ConsumerState<AudioCallScreen> createState() =>
-      _AudioCallScreenState();
+  ConsumerState<AudioCallScreen> createState() => _AudioCallScreenState();
 }
 
-class _AudioCallScreenState
-    extends ConsumerState<AudioCallScreen> {
-  final CallingService _callingService =
-      CallingService();
+class _AudioCallScreenState extends ConsumerState<AudioCallScreen> {
+  final CallingService _callingService = CallingService();
 
-  final SignalingService _signalingService =
-      SignalingService();
+  final SignalingService _signalingService = SignalingService();
 
   Timer? _timer;
 
@@ -63,30 +59,20 @@ class _AudioCallScreenState
 
   Future<void> _startCall() async {
     try {
-      final currentUser =
-          ref.read(authProvider).currentUser;
+      final currentUser = ref.read(authProvider).currentUser;
 
       if (currentUser == null) {
-        throw const CallingException(
-          'You are not logged in.',
-        );
+        throw const CallingException('You are not logged in.');
       }
 
-      if (widget.userId == null ||
-          widget.userId!.isEmpty) {
-        throw const CallingException(
-          'The other user could not be identified.',
-        );
+      if (widget.userId == null || widget.userId!.isEmpty) {
+        throw const CallingException('The other user could not be identified.');
       }
 
       // Audio only.
-      await _callingService.initializeLocalMedia(
-        video: false,
-      );
+      await _callingService.initializeLocalMedia(video: false);
 
-      await _signalingService.connect(
-        userId: currentUser.id,
-      );
+      await _signalingService.connect(userId: currentUser.id);
 
       await _callingService.createConnection(
         onIceCandidate: (candidate) {
@@ -102,9 +88,7 @@ class _AudioCallScreenState
       if (widget.isIncoming) {
         // Incoming call:
         // tell caller that we accepted it.
-        await Future.delayed(
-          const Duration(milliseconds: 150),
-        );
+        await Future.delayed(const Duration(milliseconds: 150));
 
         if (widget.callId != null) {
           _signalingService.sendCallAccepted(
@@ -114,19 +98,18 @@ class _AudioCallScreenState
         }
       } else {
         // Outgoing call.
-        ref.read(callProvider.notifier).startOutgoingCall(
+        ref
+            .read(callProvider.notifier)
+            .startOutgoingCall(
               receiverId: widget.userId!,
               receiverName: widget.userName,
               type: CallType.audio,
             );
 
-        final call =
-            ref.read(callProvider).activeCall;
+        final call = ref.read(callProvider).activeCall;
 
         if (call == null) {
-          throw const CallingException(
-            'Unable to create call.',
-          );
+          throw const CallingException('Unable to create call.');
         }
 
         _signalingService.sendCall(
@@ -143,7 +126,10 @@ class _AudioCallScreenState
       setState(() {
         _isConnecting = false;
       });
-    } catch (e) {
+    } catch (e, stackTrace) {
+      debugPrint('CALL INITIALIZATION ERROR: $e');
+      debugPrint('STACK TRACE: $stackTrace');
+
       if (!mounted) return;
 
       setState(() {
@@ -151,143 +137,99 @@ class _AudioCallScreenState
       });
 
       _showError(
-        e is CallingException
-            ? e.message
-            : 'Unable to start audio call.',
+        e is CallingException ? e.message : 'Unable to start audio call: $e',
       );
     }
   }
 
   void _registerListeners() {
     if (widget.isIncoming) {
-      _signalingService.onOffer(
-        (data) async {
-          await _handleOffer(data);
-        },
-      );
+      _signalingService.onOffer((data) async {
+        await _handleOffer(data);
+      });
     } else {
-      _signalingService.onCallAccepted(
-        (data) async {
-          final callId = data['callId'];
+      _signalingService.onCallAccepted((data) async {
+        final callId = data['callId'];
 
-          if (widget.callId != null &&
-              callId != widget.callId) {
-            return;
-          }
+        if (widget.callId != null && callId != widget.callId) {
+          return;
+        }
 
-          await _createAndSendOffer();
-        },
-      );
+        await _createAndSendOffer();
+      });
     }
 
-    _signalingService.onAnswer(
-      (data) async {
-        final answer =
-            Map<String, dynamic>.from(
-          data['answer'] as Map,
+    _signalingService.onAnswer((data) async {
+      final answer = Map<String, dynamic>.from(data['answer'] as Map);
+
+      await _callingService.setRemoteDescription(
+        type: answer['type'] as String,
+        sdp: answer['sdp'] as String,
+      );
+
+      _remoteDescriptionSet = true;
+
+      await _flushPendingIceCandidates();
+
+      _markConnected();
+    });
+
+    _signalingService.onIceCandidate((data) async {
+      final candidateData = Map<String, dynamic>.from(data['candidate'] as Map);
+
+      final candidate = RTCIceCandidate(
+        candidateData['candidate'] as String?,
+        candidateData['sdpMid'] as String?,
+        candidateData['sdpMLineIndex'] as int?,
+      );
+
+      if (_remoteDescriptionSet) {
+        await _callingService.addIceCandidate(
+          candidate: candidate.candidate ?? '',
+          sdpMid: candidate.sdpMid,
+          sdpMLineIndex: candidate.sdpMLineIndex,
         );
+      } else {
+        _pendingIceCandidates.add(candidate);
+      }
+    });
 
-        await _callingService.setRemoteDescription(
-          type: answer['type'] as String,
-          sdp: answer['sdp'] as String,
-        );
+    _signalingService.onCallDeclined((data) {
+      _handleRemoteEnd(message: 'Call declined');
+    });
 
-        _remoteDescriptionSet = true;
+    _signalingService.onCallEnded((data) {
+      _handleRemoteEnd(message: 'Call ended');
+    });
 
-        await _flushPendingIceCandidates();
+    _signalingService.onCallError((data) {
+      final message = data['message'] as String? ?? 'Call failed.';
 
-        _markConnected();
-      },
-    );
-
-    _signalingService.onIceCandidate(
-      (data) async {
-        final candidateData =
-            Map<String, dynamic>.from(
-          data['candidate'] as Map,
-        );
-
-        final candidate =
-            RTCIceCandidate(
-          candidateData['candidate'] as String?,
-          candidateData['sdpMid'] as String?,
-          candidateData['sdpMLineIndex'] as int?,
-        );
-
-        if (_remoteDescriptionSet) {
-          await _callingService.addIceCandidate(
-            candidate: candidate.candidate ?? '',
-            sdpMid: candidate.sdpMid,
-            sdpMLineIndex:
-                candidate.sdpMLineIndex,
-          );
-        } else {
-          _pendingIceCandidates.add(candidate);
-        }
-      },
-    );
-
-    _signalingService.onCallDeclined(
-      (data) {
-        _handleRemoteEnd(
-          message: 'Call declined',
-        );
-      },
-    );
-
-    _signalingService.onCallEnded(
-      (data) {
-        _handleRemoteEnd(
-          message: 'Call ended',
-        );
-      },
-    );
-
-    _signalingService.onCallError(
-      (data) {
-        final message =
-            data['message'] as String? ??
-                'Call failed.';
-
-        _showError(message);
-      },
-    );
+      _showError(message);
+    });
   }
 
   Future<void> _createAndSendOffer() async {
     try {
-      final offer =
-          await _callingService.createOffer();
+      final offer = await _callingService.createOffer();
 
-      final localDescription =
-          await _callingService.peerConnection
-              ?.getLocalDescription();
+      final localDescription = await _callingService.peerConnection
+          ?.getLocalDescription();
 
-      final description =
-          localDescription ?? offer;
+      final description = localDescription ?? offer;
 
       _signalingService.sendOffer(
         receiverId: widget.userId!,
-        offer: {
-          'type': description.type,
-          'sdp': description.sdp,
-        },
+        offer: {'type': description.type, 'sdp': description.sdp},
       );
     } catch (e) {
-      _showError(
-        'Unable to create audio connection.',
-      );
+      _showError('Unable to create audio connection.');
     }
   }
 
-  Future<void> _handleOffer(
-    Map<String, dynamic> data,
-  ) async {
+  Future<void> _handleOffer(Map<String, dynamic> data) async {
     try {
-      final offer =
-          Map<String, dynamic>.from(
-        data['offer'] as Map,
-      );
+      final offer = Map<String, dynamic>.from(data['offer'] as Map);
 
       await _callingService.setRemoteDescription(
         type: offer['type'] as String,
@@ -298,53 +240,39 @@ class _AudioCallScreenState
 
       await _flushPendingIceCandidates();
 
-      final answer =
-          await _callingService.createAnswer();
+      final answer = await _callingService.createAnswer();
 
-      final localDescription =
-          await _callingService.peerConnection
-              ?.getLocalDescription();
+      final localDescription = await _callingService.peerConnection
+          ?.getLocalDescription();
 
-      final description =
-          localDescription ?? answer;
+      final description = localDescription ?? answer;
 
       _signalingService.sendAnswer(
         receiverId: widget.userId!,
-        answer: {
-          'type': description.type,
-          'sdp': description.sdp,
-        },
+        answer: {'type': description.type, 'sdp': description.sdp},
       );
 
       _markConnected();
     } catch (e) {
-      _showError(
-        'Unable to answer the audio call.',
-      );
+      _showError('Unable to answer the audio call.');
     }
   }
 
   Future<void> _flushPendingIceCandidates() async {
     if (!_remoteDescriptionSet) return;
 
-    for (final candidate
-        in List<RTCIceCandidate>.from(
-      _pendingIceCandidates,
-    )) {
+    for (final candidate in List<RTCIceCandidate>.from(_pendingIceCandidates)) {
       await _callingService.addIceCandidate(
         candidate: candidate.candidate ?? '',
         sdpMid: candidate.sdpMid,
-        sdpMLineIndex:
-            candidate.sdpMLineIndex,
+        sdpMLineIndex: candidate.sdpMLineIndex,
       );
     }
 
     _pendingIceCandidates.clear();
   }
 
-  void _sendIceCandidate(
-    RTCIceCandidate candidate,
-  ) {
+  void _sendIceCandidate(RTCIceCandidate candidate) {
     if (widget.userId == null) return;
 
     _signalingService.sendIceCandidate(
@@ -352,8 +280,7 @@ class _AudioCallScreenState
       candidate: {
         'candidate': candidate.candidate,
         'sdpMid': candidate.sdpMid,
-        'sdpMLineIndex':
-            candidate.sdpMLineIndex,
+        'sdpMLineIndex': candidate.sdpMLineIndex,
       },
     );
   }
@@ -376,24 +303,19 @@ class _AudioCallScreenState
   void _startTimer() {
     if (_timer != null) return;
 
-    _timer = Timer.periodic(
-      const Duration(seconds: 1),
-      (_) {
-        if (!mounted) return;
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
 
-        setState(() {
-          _seconds++;
-        });
-      },
-    );
+      setState(() {
+        _seconds++;
+      });
+    });
   }
 
   String get _formattedTime {
-    final minutes =
-        (_seconds ~/ 60).toString().padLeft(2, '0');
+    final minutes = (_seconds ~/ 60).toString().padLeft(2, '0');
 
-    final seconds =
-        (_seconds % 60).toString().padLeft(2, '0');
+    final seconds = (_seconds % 60).toString().padLeft(2, '0');
 
     return '$minutes:$seconds';
   }
@@ -401,9 +323,7 @@ class _AudioCallScreenState
   Future<void> _toggleMute() async {
     final newValue = !_isMuted;
 
-    await _callingService.setMicrophoneEnabled(
-      !newValue,
-    );
+    await _callingService.setMicrophoneEnabled(!newValue);
 
     if (!mounted) return;
 
@@ -417,9 +337,7 @@ class _AudioCallScreenState
   Future<void> _toggleSpeaker() async {
     final newValue = !_isSpeakerOn;
 
-    await _callingService.setSpeakerEnabled(
-      newValue,
-    );
+    await _callingService.setSpeakerEnabled(newValue);
 
     if (!mounted) return;
 
@@ -442,15 +360,11 @@ class _AudioCallScreenState
     if (widget.userId != null) {
       _signalingService.sendCallEnded(
         receiverId: widget.userId!,
-        callId: widget.callId ??
-            ref.read(callProvider).activeCall?.id ??
-            '',
+        callId: widget.callId ?? ref.read(callProvider).activeCall?.id ?? '',
       );
     }
 
-    ref.read(callProvider.notifier).endCall(
-          duration: _formattedTime,
-        );
+    ref.read(callProvider.notifier).endCall(duration: _formattedTime);
 
     await _callingService.dispose();
     _signalingService.disconnect();
@@ -468,9 +382,7 @@ class _AudioCallScreenState
     );
   }
 
-  void _handleRemoteEnd({
-    required String message,
-  }) async {
+  void _handleRemoteEnd({required String message}) async {
     if (_isEnding) return;
 
     _isEnding = true;
@@ -498,11 +410,9 @@ class _AudioCallScreenState
   void _showError(String message) {
     if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-      ),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -521,10 +431,7 @@ class _AudioCallScreenState
         child: Column(
           children: [
             Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 20,
-                vertical: 15,
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
               child: Row(
                 children: [
                   IconButton(
@@ -559,8 +466,7 @@ class _AudioCallScreenState
                 color: AppColors.darkSurface,
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color:
-                      AppColors.primary.withOpacity(0.5),
+                  color: AppColors.primary.withOpacity(0.5),
                   width: 2,
                 ),
               ),
@@ -590,13 +496,8 @@ class _AudioCallScreenState
             const SizedBox(height: 8),
 
             Text(
-              _isConnected
-                  ? _formattedTime
-                  : '00:00',
-              style: const TextStyle(
-                color: Colors.white60,
-                fontSize: 14,
-              ),
+              _isConnected ? _formattedTime : '00:00',
+              style: const TextStyle(color: Colors.white60, fontSize: 14),
             ),
 
             const SizedBox(height: 8),
@@ -605,12 +506,10 @@ class _AudioCallScreenState
               _isConnecting
                   ? 'Connecting...'
                   : _isConnected
-                      ? 'Connected'
-                      : 'Waiting for answer...',
+                  ? 'Connected'
+                  : 'Waiting for answer...',
               style: TextStyle(
-                color: _isConnected
-                    ? AppColors.online
-                    : Colors.white70,
+                color: _isConnected ? AppColors.online : Colors.white70,
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
               ),
@@ -619,29 +518,18 @@ class _AudioCallScreenState
             const Spacer(),
 
             Container(
-              margin: const EdgeInsets.symmetric(
-                horizontal: 25,
-              ),
-              padding: const EdgeInsets.symmetric(
-                horizontal: 22,
-                vertical: 20,
-              ),
+              margin: const EdgeInsets.symmetric(horizontal: 25),
+              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 20),
               decoration: BoxDecoration(
                 color: AppColors.darkSurface,
-                borderRadius:
-                    BorderRadius.circular(25),
+                borderRadius: BorderRadius.circular(25),
               ),
               child: Row(
-                mainAxisAlignment:
-                    MainAxisAlignment.spaceAround,
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
                 children: [
                   _CallControl(
-                    icon: _isMuted
-                        ? Icons.mic_off_rounded
-                        : Icons.mic_rounded,
-                    label: _isMuted
-                        ? 'Unmute'
-                        : 'Mute',
+                    icon: _isMuted ? Icons.mic_off_rounded : Icons.mic_rounded,
+                    label: _isMuted ? 'Unmute' : 'Mute',
                     active: _isMuted,
                     onTap: _toggleMute,
                   ),
@@ -678,13 +566,10 @@ class _AudioCallScreenState
         .toList();
 
     if (parts.length >= 2) {
-      return '${parts[0][0]}${parts[1][0]}'
-          .toUpperCase();
+      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
     }
 
-    return name.isNotEmpty
-        ? name.substring(0, 1).toUpperCase()
-        : 'U';
+    return name.isNotEmpty ? name.substring(0, 1).toUpperCase() : 'U';
   }
 }
 
@@ -708,14 +593,14 @@ class _CallControl extends StatelessWidget {
     final Color background = danger
         ? AppColors.danger
         : active
-            ? Colors.white
-            : const Color(0xFF334155);
+        ? Colors.white
+        : const Color(0xFF334155);
 
     final Color foreground = danger
         ? Colors.white
         : active
-            ? AppColors.darkCall
-            : Colors.white;
+        ? AppColors.darkCall
+        : Colors.white;
 
     return Column(
       children: [
@@ -728,20 +613,13 @@ class _CallControl extends StatelessWidget {
               color: background,
               shape: BoxShape.circle,
             ),
-            child: Icon(
-              icon,
-              color: foreground,
-              size: 22,
-            ),
+            child: Icon(icon, color: foreground, size: 22),
           ),
         ),
         const SizedBox(height: 8),
         Text(
           label,
-          style: const TextStyle(
-            color: Colors.white70,
-            fontSize: 11,
-          ),
+          style: const TextStyle(color: Colors.white70, fontSize: 11),
         ),
       ],
     );
