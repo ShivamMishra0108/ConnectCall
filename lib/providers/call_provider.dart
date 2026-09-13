@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/services/api_service.dart';
 import '../models/call_model.dart';
 import 'auth_provider.dart';
 
@@ -44,7 +45,10 @@ class CallNotifier extends Notifier<CallState> {
     return const CallState();
   }
 
-  /// Start a new outgoing call.
+  // ============================================================
+  // START OUTGOING CALL
+  // ============================================================
+
   void startOutgoingCall({
     required String receiverId,
     required String receiverName,
@@ -72,9 +76,15 @@ class CallNotifier extends Notifier<CallState> {
       activeCall: call,
       isCameraOn: type == CallType.video,
     );
+
+    // Save call immediately as "ringing".
+    _createCallHistory(call);
   }
 
-  /// Receive an incoming call.
+  // ============================================================
+  // RECEIVE INCOMING CALL
+  // ============================================================
+
   void receiveIncomingCall({
     required CallModel call,
   }) {
@@ -82,9 +92,15 @@ class CallNotifier extends Notifier<CallState> {
       activeCall: call,
       isCameraOn: call.type == CallType.video,
     );
+
+    // Save incoming call as "ringing".
+    _createCallHistory(call);
   }
 
-  /// Mark the current call as connected.
+  // ============================================================
+  // MARK CONNECTED
+  // ============================================================
+
   void markConnected() {
     final call = state.activeCall;
 
@@ -92,14 +108,26 @@ class CallNotifier extends Notifier<CallState> {
       return;
     }
 
+    final connectedCall = call.copyWith(
+      status: CallStatus.connected,
+    );
+
     state = state.copyWith(
-      activeCall: call.copyWith(
-        status: CallStatus.connected,
-      ),
+      activeCall: connectedCall,
+    );
+
+    // Save connected state and start time.
+    _updateCallHistory(
+      callId: connectedCall.id,
+      status: 'connected',
+      startedAt: DateTime.now(),
     );
   }
 
-  /// Accept an incoming call.
+  // ============================================================
+  // ACCEPT CALL
+  // ============================================================
+
   void acceptCall() {
     final call = state.activeCall;
 
@@ -107,14 +135,25 @@ class CallNotifier extends Notifier<CallState> {
       return;
     }
 
+    final acceptedCall = call.copyWith(
+      status: CallStatus.connected,
+    );
+
     state = state.copyWith(
-      activeCall: call.copyWith(
-        status: CallStatus.connected,
-      ),
+      activeCall: acceptedCall,
+    );
+
+    _updateCallHistory(
+      callId: acceptedCall.id,
+      status: 'connected',
+      startedAt: DateTime.now(),
     );
   }
 
-  /// Decline the current call.
+  // ============================================================
+  // DECLINE CALL
+  // ============================================================
+
   void declineCall() {
     final call = state.activeCall;
 
@@ -122,15 +161,28 @@ class CallNotifier extends Notifier<CallState> {
       return;
     }
 
+    final endedAt = DateTime.now();
+
+    final declinedCall = call.copyWith(
+      status: CallStatus.declined,
+      endedAt: endedAt,
+    );
+
     state = state.copyWith(
-      activeCall: call.copyWith(
-        status: CallStatus.declined,
-        endedAt: DateTime.now(),
-      ),
+      activeCall: declinedCall,
+    );
+
+    _updateCallHistory(
+      callId: declinedCall.id,
+      status: 'declined',
+      endedAt: endedAt,
     );
   }
 
-  /// End an active call.
+  // ============================================================
+  // END CALL
+  // ============================================================
+
   void endCall({
     required String duration,
   }) {
@@ -140,16 +192,33 @@ class CallNotifier extends Notifier<CallState> {
       return;
     }
 
+    final endedAt = DateTime.now();
+
+    final completedCall = call.copyWith(
+      status: CallStatus.completed,
+      endedAt: endedAt,
+      duration: duration,
+    );
+
     state = state.copyWith(
-      activeCall: call.copyWith(
-        status: CallStatus.completed,
-        endedAt: DateTime.now(),
-        duration: duration,
-      ),
+      activeCall: completedCall,
+    );
+
+    final durationInSeconds =
+        _durationToSeconds(duration);
+
+    _updateCallHistory(
+      callId: completedCall.id,
+      status: 'completed',
+      endedAt: endedAt,
+      duration: durationInSeconds,
     );
   }
 
-  /// Mark call as failed.
+  // ============================================================
+  // FAILED CALL
+  // ============================================================
+
   void failCall() {
     final call = state.activeCall;
 
@@ -157,47 +226,189 @@ class CallNotifier extends Notifier<CallState> {
       return;
     }
 
+    final endedAt = DateTime.now();
+
+    final failedCall = call.copyWith(
+      status: CallStatus.failed,
+      endedAt: endedAt,
+    );
+
     state = state.copyWith(
-      activeCall: call.copyWith(
-        status: CallStatus.failed,
-        endedAt: DateTime.now(),
-      ),
+      activeCall: failedCall,
+    );
+
+    _updateCallHistory(
+      callId: failedCall.id,
+      status: 'failed',
+      endedAt: endedAt,
     );
   }
 
-  /// Clear the active call.
+  // ============================================================
+  // CLEAR ACTIVE CALL
+  // ============================================================
+
   void clearCall() {
     state = state.copyWith(
       clearActiveCall: true,
     );
   }
 
-  /// Mute / unmute microphone.
+  // ============================================================
+  // MUTE
+  // ============================================================
+
   void toggleMute() {
     state = state.copyWith(
       isMuted: !state.isMuted,
     );
   }
 
-  /// Turn speaker on/off.
+  // ============================================================
+  // SPEAKER
+  // ============================================================
+
   void toggleSpeaker() {
     state = state.copyWith(
       isSpeakerOn: !state.isSpeakerOn,
     );
   }
 
-  /// Turn camera on/off.
+  // ============================================================
+  // CAMERA
+  // ============================================================
+
   void toggleCamera() {
     state = state.copyWith(
       isCameraOn: !state.isCameraOn,
     );
   }
 
-  /// Switch front/rear camera.
+  // ============================================================
+  // SWITCH CAMERA
+  // ============================================================
+
   void switchCamera() {
     state = state.copyWith(
       isFrontCamera: !state.isFrontCamera,
     );
+  }
+
+  // ============================================================
+  // CREATE CALL HISTORY
+  // ============================================================
+
+  Future<void> _createCallHistory(
+    CallModel call,
+  ) async {
+    try {
+      final result =
+          await ApiService.createCallHistory(
+        callId: call.id,
+        callerId: call.callerId,
+        receiverId: call.receiverId,
+        callerName: call.callerName,
+        receiverName: call.receiverName,
+        callType:
+            call.type == CallType.video
+                ? 'video'
+                : 'audio',
+      );
+
+      if (result['success'] == true) {
+        print(
+          'CALL HISTORY: Created ${call.id}',
+        );
+      } else {
+        print(
+          'CALL HISTORY: Create failed: $result',
+        );
+      }
+    } catch (e) {
+      // Database failure must NOT break the actual call.
+      print(
+        'CALL HISTORY CREATE ERROR: $e',
+      );
+    }
+  }
+
+  // ============================================================
+  // UPDATE CALL HISTORY
+  // ============================================================
+
+  Future<void> _updateCallHistory({
+    required String callId,
+    String? status,
+    DateTime? startedAt,
+    DateTime? endedAt,
+    int? duration,
+  }) async {
+    try {
+      final result =
+          await ApiService.updateCallHistory(
+        callId: callId,
+        status: status,
+        startedAt: startedAt,
+        endedAt: endedAt,
+        duration: duration,
+      );
+
+      if (result['success'] == true) {
+        print(
+          'CALL HISTORY: Updated $callId -> $status',
+        );
+      } else {
+        print(
+          'CALL HISTORY: Update failed: $result',
+        );
+      }
+    } catch (e) {
+      // Database failure must NOT break the actual call.
+      print(
+        'CALL HISTORY UPDATE ERROR: $e',
+      );
+    }
+  }
+
+  // ============================================================
+  // CONVERT "HH:MM:SS" / "MM:SS" TO SECONDS
+  // ============================================================
+
+  int _durationToSeconds(
+    String duration,
+  ) {
+    try {
+      final parts = duration.split(':');
+
+      if (parts.length == 2) {
+        final minutes =
+            int.tryParse(parts[0]) ?? 0;
+
+        final seconds =
+            int.tryParse(parts[1]) ?? 0;
+
+        return (minutes * 60) + seconds;
+      }
+
+      if (parts.length == 3) {
+        final hours =
+            int.tryParse(parts[0]) ?? 0;
+
+        final minutes =
+            int.tryParse(parts[1]) ?? 0;
+
+        final seconds =
+            int.tryParse(parts[2]) ?? 0;
+
+        return (hours * 3600) +
+            (minutes * 60) +
+            seconds;
+      }
+
+      return int.tryParse(duration) ?? 0;
+    } catch (_) {
+      return 0;
+    }
   }
 }
 
