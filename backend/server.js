@@ -6,6 +6,7 @@ const { Server } = require("socket.io");
 
 const connectDB = require("./config/db");
 const userRoutes = require("./routes/userRoutes");
+const callRoutes = require("./routes/callRoutes");
 const setupCallSocket = require("./sockets/callSocket");
 
 dotenv.config();
@@ -17,38 +18,51 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: "*",
-    methods: ["GET", "POST"]
-  }
+    methods: ["GET", "POST", "PATCH"],
+  },
 });
 
+// ============================================================
+// MIDDLEWARE
+// ============================================================
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 
+// ============================================================
+// DATABASE
+// ============================================================
 
-// Database
 connectDB();
 
+// ============================================================
+// ROUTES
+// ============================================================
 
-// Routes
 app.get("/", (req, res) => {
   res.json({
     success: true,
-    message: "ConnectCall backend is running"
+    message: "ConnectCall backend is running",
   });
 });
 
 app.use("/api/users", userRoutes);
+app.use("/api/calls", callRoutes);
 
+// ============================================================
+// SOCKET.IO
+// ============================================================
 
-// Socket.IO
 setupCallSocket(io);
 
+// ============================================================
+// START SERVER
+// ============================================================
 
-// Start server
 const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`ConnectCall server running on port ${PORT}`);
+  console.log(
+    `ConnectCall server running on port ${PORT}`
+  );
 });
