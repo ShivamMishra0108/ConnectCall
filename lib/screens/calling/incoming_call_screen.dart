@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/services/calling_service.dart';
 import '../../core/services/signaling_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../models/call_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/call_provider.dart';
+import '../../providers/incoming_call_provider.dart';
 import 'audio_call_screen.dart';
 import 'video_call_screen.dart';
 
@@ -25,9 +25,7 @@ class IncomingCallScreen extends ConsumerStatefulWidget {
 
 class _IncomingCallScreenState
     extends ConsumerState<IncomingCallScreen> {
-  final CallingService _callingService = CallingService();
-  final SignalingService _signalingService =
-      SignalingService();
+  late final SignalingService _signalingService;
 
   bool _isProcessing = false;
 
@@ -35,53 +33,57 @@ class _IncomingCallScreenState
   void initState() {
     super.initState();
 
+    _signalingService =
+        ref.read(incomingCallProvider).signalingService;
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
       ref.read(callProvider.notifier).receiveIncomingCall(
             call: widget.call,
           );
     });
   }
 
-Future<void> _acceptCall() async {
-  if (_isProcessing) return;
+  Future<void> _acceptCall() async {
+    if (_isProcessing) return;
 
-  setState(() {
-    _isProcessing = true;
-  });
+    setState(() {
+      _isProcessing = true;
+    });
 
-  ref.read(callProvider.notifier).acceptCall();
+    final bool isVideo =
+        widget.call.type == CallType.video;
 
-  if (!mounted) return;
+    if (!mounted) return;
 
-  final isVideo =
-      widget.call.type == CallType.video;
-
-  if (isVideo) {
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (_) => VideoCallScreen(
-          userName: widget.call.callerName,
-          userId: widget.call.callerId,
-          callId: widget.call.id,
-          isIncoming: true,
+    if (isVideo) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => VideoCallScreen(
+            userName: widget.call.callerName,
+            userId: widget.call.callerId,
+            callId: widget.call.id,
+            isIncoming: true,
+          ),
         ),
-      ),
-    );
-  } else {
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (_) => AudioCallScreen(
-          userName: widget.call.callerName,
-          userId: widget.call.callerId,
-          callId: widget.call.id,
-          isIncoming: true,
+      );
+    } else {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => AudioCallScreen(
+            userName: widget.call.callerName,
+            userId: widget.call.callerId,
+            callId: widget.call.id,
+            isIncoming: true,
+          ),
         ),
-      ),
-    );
+      );
+    }
   }
-}
+
   Future<void> _declineCall() async {
     if (_isProcessing) return;
 
@@ -89,26 +91,44 @@ Future<void> _acceptCall() async {
       _isProcessing = true;
     });
 
-    final currentUser =
-        ref.read(authProvider).currentUser;
+    try {
+      final currentUser =
+          ref.read(authProvider).currentUser;
 
-    if (currentUser != null) {
-      await _signalingService.connect(
-        userId: currentUser.id,
+      if (currentUser != null &&
+          _signalingService.isConnected) {
+        _signalingService.sendCallDeclined(
+          receiverId: widget.call.callerId,
+          callId: widget.call.id,
+        );
+
+        await Future.delayed(
+          const Duration(milliseconds: 250),
+        );
+      }
+
+      ref.read(callProvider.notifier).declineCall();
+      ref.read(callProvider.notifier).clearCall();
+
+      if (!mounted) return;
+
+      Navigator.pop(context);
+    } catch (e, stackTrace) {
+      debugPrint(
+        'DECLINE CALL ERROR: $e',
       );
 
-      _signalingService.sendCallDeclined(
-        receiverId: widget.call.callerId,
-        callId: widget.call.id,
+      debugPrint(
+        'STACK TRACE: $stackTrace',
       );
+
+      ref.read(callProvider.notifier).declineCall();
+      ref.read(callProvider.notifier).clearCall();
+
+      if (!mounted) return;
+
+      Navigator.pop(context);
     }
-
-    ref.read(callProvider.notifier).declineCall();
-    ref.read(callProvider.notifier).clearCall();
-
-    if (!mounted) return;
-
-    Navigator.pop(context);
   }
 
   String get _initials {
@@ -130,14 +150,19 @@ Future<void> _acceptCall() async {
 
   @override
   void dispose() {
-    _callingService.dispose();
-    _signalingService.disconnect();
+    // IMPORTANT:
+    // Do NOT disconnect the signaling service here.
+    //
+    // This is the shared application socket used by:
+    // - online presence
+    // - incoming calls
+    // - active call signaling
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final isVideo =
+    final bool isVideo =
         widget.call.type == CallType.video;
 
     return Scaffold(
@@ -217,7 +242,9 @@ Future<void> _acceptCall() async {
                 ),
                 const SizedBox(width: 7),
                 Text(
-                  isVideo ? 'Video Call' : 'Audio Call',
+                  isVideo
+                      ? 'Video Call'
+                      : 'Audio Call',
                   style: const TextStyle(
                     color: Colors.white60,
                     fontSize: 14,
@@ -257,7 +284,8 @@ Future<void> _acceptCall() async {
 
             if (_isProcessing)
               const Padding(
-                padding: EdgeInsets.only(bottom: 20),
+                padding:
+                    EdgeInsets.only(bottom: 20),
                 child: SizedBox(
                   height: 22,
                   width: 22,

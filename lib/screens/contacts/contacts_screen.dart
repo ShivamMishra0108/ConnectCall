@@ -202,8 +202,9 @@ class _ContactsScreenState
       context,
       MaterialPageRoute(
         builder: (_) => VideoCallScreen(
-          userName: user.name,
-        ),
+  userName: user.name,
+  userId: user.id,
+),
       ),
     );
   }

@@ -10,6 +10,7 @@ import '../../core/theme/app_theme.dart';
 import '../../models/call_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/call_provider.dart';
+import '../../providers/incoming_call_provider.dart';
 import 'call_ended_screen.dart';
 
 class VideoCallScreen extends ConsumerStatefulWidget {
@@ -36,8 +37,7 @@ class _VideoCallScreenState
   final CallingService _callingService =
       CallingService();
 
-  final SignalingService _signalingService =
-      SignalingService();
+  late final SignalingService _signalingService;
 
   final RTCVideoRenderer _localRenderer =
       RTCVideoRenderer();
@@ -66,14 +66,36 @@ class _VideoCallScreenState
   void initState() {
     super.initState();
 
+    _signalingService =
+        ref.read(incomingCallProvider).signalingService;
+
     _initializeRenderers();
   }
 
   Future<void> _initializeRenderers() async {
-    await _localRenderer.initialize();
-    await _remoteRenderer.initialize();
+    try {
+      await _localRenderer.initialize();
+      await _remoteRenderer.initialize();
 
-    await _startCall();
+      if (!mounted) return;
+
+      await _startCall();
+    } catch (e, stackTrace) {
+      debugPrint(
+        'VIDEO RENDERER INITIALIZATION ERROR: $e',
+      );
+      debugPrint('$stackTrace');
+
+      if (!mounted) return;
+
+      setState(() {
+        _isConnecting = false;
+      });
+
+      _showError(
+        'Unable to initialize video call.',
+      );
+    }
   }
 
   Future<void> _startCall() async {
@@ -101,15 +123,25 @@ class _VideoCallScreenState
 
       _localRenderer.srcObject = localStream;
 
-      await _signalingService.connect(
-        userId: currentUser.id,
-      );
+      // Use the shared application-level signaling socket.
+      final incomingCallListener =
+          ref.read(incomingCallProvider);
+
+      await incomingCallListener.ensureStarted();
+
+      if (!_signalingService.isConnected) {
+        throw const CallingException(
+          'Signaling server is not connected.',
+        );
+      }
 
       await _callingService.createConnection(
         onIceCandidate: (candidate) {
           _sendIceCandidate(candidate);
         },
         onRemoteStream: (stream) {
+          if (!mounted || _isEnding) return;
+
           _remoteRenderer.srcObject = stream;
 
           _markConnected();
@@ -119,18 +151,22 @@ class _VideoCallScreenState
       _registerListeners();
 
       if (widget.isIncoming) {
+        // Tell the caller that the incoming call was accepted.
         await Future.delayed(
           const Duration(milliseconds: 150),
         );
 
-        if (widget.callId != null) {
+        if (widget.callId != null &&
+            widget.callId!.isNotEmpty) {
           _signalingService.sendCallAccepted(
             receiverId: widget.userId!,
             callId: widget.callId!,
           );
         }
       } else {
-        ref.read(callProvider.notifier).startOutgoingCall(
+        ref
+            .read(callProvider.notifier)
+            .startOutgoingCall(
               receiverId: widget.userId!,
               receiverName: widget.userName,
               type: CallType.video,
@@ -159,7 +195,14 @@ class _VideoCallScreenState
       setState(() {
         _isConnecting = false;
       });
-    } catch (e) {
+    } catch (e, stackTrace) {
+      debugPrint(
+        'VIDEO CALL INITIALIZATION ERROR: $e',
+      );
+      debugPrint(
+        'STACK TRACE: $stackTrace',
+      );
+
       if (!mounted) return;
 
       setState(() {
@@ -178,12 +221,16 @@ class _VideoCallScreenState
     if (widget.isIncoming) {
       _signalingService.onOffer(
         (data) async {
+          if (_isEnding) return;
+
           await _handleOffer(data);
         },
       );
     } else {
       _signalingService.onCallAccepted(
         (data) async {
+          if (_isEnding) return;
+
           final callId = data['callId'];
 
           if (widget.callId != null &&
@@ -198,65 +245,93 @@ class _VideoCallScreenState
 
     _signalingService.onAnswer(
       (data) async {
-        final answer =
-            Map<String, dynamic>.from(
-          data['answer'] as Map,
-        );
+        if (_isEnding) return;
 
-        await _callingService.setRemoteDescription(
-          type: answer['type'] as String,
-          sdp: answer['sdp'] as String,
-        );
+        try {
+          final answer =
+              Map<String, dynamic>.from(
+            data['answer'] as Map,
+          );
 
-        _remoteDescriptionSet = true;
+          await _callingService.setRemoteDescription(
+            type: answer['type'] as String,
+            sdp: answer['sdp'] as String,
+          );
 
-        await _flushPendingIceCandidates();
+          _remoteDescriptionSet = true;
 
-        _markConnected();
+          await _flushPendingIceCandidates();
+
+          _markConnected();
+        } catch (e, stackTrace) {
+          debugPrint(
+            'VIDEO ANSWER ERROR: $e',
+          );
+          debugPrint('$stackTrace');
+
+          _showError(
+            'Unable to establish video connection.',
+          );
+        }
       },
     );
 
     _signalingService.onIceCandidate(
       (data) async {
-        final candidateData =
-            Map<String, dynamic>.from(
-          data['candidate'] as Map,
-        );
+        if (_isEnding) return;
 
-        final candidate =
-            RTCIceCandidate(
-          candidateData['candidate'] as String?,
-          candidateData['sdpMid'] as String?,
-          candidateData['sdpMLineIndex'] as int?,
-        );
-
-        if (_remoteDescriptionSet) {
-          await _callingService.addIceCandidate(
-            candidate: candidate.candidate ?? '',
-            sdpMid: candidate.sdpMid,
-            sdpMLineIndex:
-                candidate.sdpMLineIndex,
+        try {
+          final candidateData =
+              Map<String, dynamic>.from(
+            data['candidate'] as Map,
           );
-        } else {
-          _pendingIceCandidates.add(candidate);
+
+          final candidate = RTCIceCandidate(
+            candidateData['candidate'] as String?,
+            candidateData['sdpMid'] as String?,
+            candidateData['sdpMLineIndex'] as int?,
+          );
+
+          if (_remoteDescriptionSet) {
+            await _callingService.addIceCandidate(
+              candidate:
+                  candidate.candidate ?? '',
+              sdpMid: candidate.sdpMid,
+              sdpMLineIndex:
+                  candidate.sdpMLineIndex,
+            );
+          } else {
+            _pendingIceCandidates.add(candidate);
+          }
+        } catch (e, stackTrace) {
+          debugPrint(
+            'VIDEO ICE CANDIDATE ERROR: $e',
+          );
+          debugPrint('$stackTrace');
         }
       },
     );
 
     _signalingService.onCallDeclined(
       (data) {
+        if (_isEnding) return;
+
         _handleRemoteEnd();
       },
     );
 
     _signalingService.onCallEnded(
       (data) {
+        if (_isEnding) return;
+
         _handleRemoteEnd();
       },
     );
 
     _signalingService.onCallError(
       (data) {
+        if (_isEnding) return;
+
         final message =
             data['message'] as String? ??
                 'Call failed.';
@@ -267,6 +342,8 @@ class _VideoCallScreenState
   }
 
   Future<void> _createAndSendOffer() async {
+    if (_isEnding) return;
+
     try {
       final offer =
           await _callingService.createOffer();
@@ -285,7 +362,12 @@ class _VideoCallScreenState
           'sdp': description.sdp,
         },
       );
-    } catch (e) {
+    } catch (e, stackTrace) {
+      debugPrint(
+        'CREATE VIDEO OFFER ERROR: $e',
+      );
+      debugPrint('$stackTrace');
+
       _showError(
         'Unable to create video connection.',
       );
@@ -295,6 +377,8 @@ class _VideoCallScreenState
   Future<void> _handleOffer(
     Map<String, dynamic> data,
   ) async {
+    if (_isEnding) return;
+
     try {
       final offer =
           Map<String, dynamic>.from(
@@ -329,7 +413,12 @@ class _VideoCallScreenState
       );
 
       _markConnected();
-    } catch (e) {
+    } catch (e, stackTrace) {
+      debugPrint(
+        'HANDLE VIDEO OFFER ERROR: $e',
+      );
+      debugPrint('$stackTrace');
+
       _showError(
         'Unable to answer the video call.',
       );
@@ -339,25 +428,39 @@ class _VideoCallScreenState
   Future<void> _flushPendingIceCandidates() async {
     if (!_remoteDescriptionSet) return;
 
-    for (final candidate
-        in List<RTCIceCandidate>.from(
+    final pendingCandidates =
+        List<RTCIceCandidate>.from(
       _pendingIceCandidates,
-    )) {
-      await _callingService.addIceCandidate(
-        candidate: candidate.candidate ?? '',
-        sdpMid: candidate.sdpMid,
-        sdpMLineIndex:
-            candidate.sdpMLineIndex,
-      );
-    }
+    );
 
     _pendingIceCandidates.clear();
+
+    for (final candidate in pendingCandidates) {
+      try {
+        await _callingService.addIceCandidate(
+          candidate:
+              candidate.candidate ?? '',
+          sdpMid: candidate.sdpMid,
+          sdpMLineIndex:
+              candidate.sdpMLineIndex,
+        );
+      } catch (e) {
+        debugPrint(
+          'PENDING VIDEO ICE ERROR: $e',
+        );
+      }
+    }
   }
 
   void _sendIceCandidate(
     RTCIceCandidate candidate,
   ) {
-    if (widget.userId == null) return;
+    if (_isEnding) return;
+
+    if (widget.userId == null ||
+        widget.userId!.isEmpty) {
+      return;
+    }
 
     _signalingService.sendIceCandidate(
       receiverId: widget.userId!,
@@ -371,7 +474,7 @@ class _VideoCallScreenState
   }
 
   void _markConnected() {
-    if (!mounted) return;
+    if (!mounted || _isEnding) return;
 
     if (!_isConnected) {
       setState(() {
@@ -381,7 +484,9 @@ class _VideoCallScreenState
 
       _startTimer();
 
-      ref.read(callProvider.notifier).markConnected();
+      ref
+          .read(callProvider.notifier)
+          .markConnected();
     }
   }
 
@@ -391,7 +496,7 @@ class _VideoCallScreenState
     _timer = Timer.periodic(
       const Duration(seconds: 1),
       (_) {
-        if (!mounted) return;
+        if (!mounted || _isEnding) return;
 
         setState(() {
           _seconds++;
@@ -402,72 +507,113 @@ class _VideoCallScreenState
 
   String get _formattedTime {
     final minutes =
-        (_seconds ~/ 60).toString().padLeft(2, '0');
+        (_seconds ~/ 60)
+            .toString()
+            .padLeft(2, '0');
 
     final seconds =
-        (_seconds % 60).toString().padLeft(2, '0');
+        (_seconds % 60)
+            .toString()
+            .padLeft(2, '0');
 
     return '$minutes:$seconds';
   }
 
   Future<void> _toggleMute() async {
+    if (_isEnding) return;
+
     final newValue = !_isMuted;
 
-    await _callingService.setMicrophoneEnabled(
-      !newValue,
-    );
+    try {
+      await _callingService
+          .setMicrophoneEnabled(!newValue);
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    setState(() {
-      _isMuted = newValue;
-    });
+      setState(() {
+        _isMuted = newValue;
+      });
 
-    ref.read(callProvider.notifier).toggleMute();
+      ref
+          .read(callProvider.notifier)
+          .toggleMute();
+    } catch (e) {
+      debugPrint(
+        'VIDEO MUTE ERROR: $e',
+      );
+    }
   }
 
   Future<void> _toggleCamera() async {
+    if (_isEnding) return;
+
     final newValue = !_isCameraOn;
 
-    await _callingService.setCameraEnabled(
-      newValue,
-    );
+    try {
+      await _callingService
+          .setCameraEnabled(newValue);
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    setState(() {
-      _isCameraOn = newValue;
-    });
+      setState(() {
+        _isCameraOn = newValue;
+      });
 
-    ref.read(callProvider.notifier).toggleCamera();
+      ref
+          .read(callProvider.notifier)
+          .toggleCamera();
+    } catch (e) {
+      debugPrint(
+        'CAMERA TOGGLE ERROR: $e',
+      );
+    }
   }
 
   Future<void> _switchCamera() async {
-    await _callingService.switchCamera();
+    if (_isEnding) return;
 
-    if (!mounted) return;
+    try {
+      await _callingService.switchCamera();
 
-    setState(() {
-      _isFrontCamera = !_isFrontCamera;
-    });
+      if (!mounted) return;
 
-    ref.read(callProvider.notifier).switchCamera();
+      setState(() {
+        _isFrontCamera = !_isFrontCamera;
+      });
+
+      ref
+          .read(callProvider.notifier)
+          .switchCamera();
+    } catch (e) {
+      debugPrint(
+        'SWITCH CAMERA ERROR: $e',
+      );
+    }
   }
 
   Future<void> _toggleSpeaker() async {
+    if (_isEnding) return;
+
     final newValue = !_isSpeakerOn;
 
-    await _callingService.setSpeakerEnabled(
-      newValue,
-    );
+    try {
+      await _callingService
+          .setSpeakerEnabled(newValue);
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    setState(() {
-      _isSpeakerOn = newValue;
-    });
+      setState(() {
+        _isSpeakerOn = newValue;
+      });
 
-    ref.read(callProvider.notifier).toggleSpeaker();
+      ref
+          .read(callProvider.notifier)
+          .toggleSpeaker();
+    } catch (e) {
+      debugPrint(
+        'VIDEO SPEAKER ERROR: $e',
+      );
+    }
   }
 
   Future<void> _endCall() async {
@@ -479,16 +625,26 @@ class _VideoCallScreenState
 
     _timer?.cancel();
 
-    if (widget.userId != null) {
+    final activeCall =
+        ref.read(callProvider).activeCall;
+
+    final String callId =
+        widget.callId ??
+        activeCall?.id ??
+        '';
+
+    if (widget.userId != null &&
+        widget.userId!.isNotEmpty &&
+        callId.isNotEmpty) {
       _signalingService.sendCallEnded(
         receiverId: widget.userId!,
-        callId: widget.callId ??
-            ref.read(callProvider).activeCall?.id ??
-            '',
+        callId: callId,
       );
     }
 
-    ref.read(callProvider.notifier).endCall(
+    ref
+        .read(callProvider.notifier)
+        .endCall(
           duration: _formattedTime,
         );
 
@@ -497,7 +653,8 @@ class _VideoCallScreenState
     _localRenderer.srcObject = null;
     _remoteRenderer.srcObject = null;
 
-    _signalingService.disconnect();
+    // IMPORTANT:
+    // Do NOT disconnect the shared signaling service.
 
     if (!mounted) return;
 
@@ -512,21 +669,23 @@ class _VideoCallScreenState
     );
   }
 
-  void _handleRemoteEnd() async {
+  Future<void> _handleRemoteEnd() async {
     if (_isEnding) return;
 
     _isEnding = true;
 
     _timer?.cancel();
 
-    ref.read(callProvider.notifier).clearCall();
+    ref
+        .read(callProvider.notifier)
+        .clearCall();
 
     await _callingService.dispose();
 
     _localRenderer.srcObject = null;
     _remoteRenderer.srcObject = null;
 
-    _signalingService.disconnect();
+    // Do NOT disconnect the shared signaling service.
 
     if (!mounted) return;
 
@@ -562,7 +721,10 @@ class _VideoCallScreenState
     _remoteRenderer.dispose();
 
     _callingService.dispose();
-    _signalingService.disconnect();
+
+    // IMPORTANT:
+    // The signaling service is shared by the entire app.
+    // Never disconnect it from this screen.
 
     super.dispose();
   }
@@ -664,7 +826,8 @@ class _VideoCallScreenState
               child: Container(
                 height: 150,
                 width: 105,
-                clipBehavior: Clip.antiAlias,
+                clipBehavior:
+                    Clip.antiAlias,
                 decoration: BoxDecoration(
                   color: AppColors.darkSurface,
                   borderRadius:
@@ -674,7 +837,8 @@ class _VideoCallScreenState
                   ),
                 ),
                 child: _isCameraOn &&
-                        _localRenderer.srcObject != null
+                        _localRenderer.srcObject !=
+                            null
                     ? RTCVideoView(
                         _localRenderer,
                         mirror: _isFrontCamera,
@@ -703,7 +867,8 @@ class _VideoCallScreenState
                   vertical: 15,
                 ),
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.65),
+                  color:
+                      Colors.black.withOpacity(0.65),
                   borderRadius:
                       BorderRadius.circular(25),
                 ),
@@ -725,9 +890,7 @@ class _VideoCallScreenState
                       icon: _isCameraOn
                           ? Icons.videocam_rounded
                           : Icons.videocam_off_rounded,
-                      label: _isCameraOn
-                          ? 'Camera'
-                          : 'Camera',
+                      label: 'Camera',
                       active: !_isCameraOn,
                       onTap: _toggleCamera,
                     ),
@@ -746,7 +909,8 @@ class _VideoCallScreenState
                       onTap: _switchCamera,
                     ),
                     _VideoControl(
-                      icon: Icons.call_end_rounded,
+                      icon:
+                          Icons.call_end_rounded,
                       label: 'End',
                       danger: true,
                       onTap: _endCall,

@@ -1,33 +1,92 @@
 const User = require("../models/User");
 
+// userId -> Set of socket IDs
 const onlineUsers = new Map();
 
 const setupCallSocket = (io) => {
   io.on("connection", (socket) => {
     console.log("Socket connected:", socket.id);
 
+    // --------------------------------------------------
+    // Helper: add a socket for a user
+    // --------------------------------------------------
+    const registerUser = async (userId) => {
+      if (!userId) {
+        console.log("Cannot register socket without userId");
+        return;
+      }
+
+      const normalizedUserId = String(userId);
+
+      if (!onlineUsers.has(normalizedUserId)) {
+        onlineUsers.set(normalizedUserId, new Set());
+      }
+
+      onlineUsers.get(normalizedUserId).add(socket.id);
+
+      // Keep the user ID attached to this socket.
+      socket.userId = normalizedUserId;
+
+      try {
+        await User.findByIdAndUpdate(normalizedUserId, {
+          online: true,
+          socketId: socket.id,
+        });
+      } catch (error) {
+        console.error("User online database update error:", error);
+      }
+
+      io.emit(
+        "online-users",
+        Array.from(onlineUsers.keys())
+      );
+
+      console.log("User online:", normalizedUserId);
+      console.log(
+        "Current online users:",
+        Array.from(onlineUsers.keys())
+      );
+    };
+
+    // --------------------------------------------------
+    // Helper: get all sockets belonging to a user
+    // --------------------------------------------------
+    const getUserSockets = (userId) => {
+      const normalizedUserId = String(userId);
+      return onlineUsers.get(normalizedUserId) || new Set();
+    };
+
+    // --------------------------------------------------
+    // Helper: check whether a user is online
+    // --------------------------------------------------
+    const isUserOnline = (userId) => {
+      const sockets = getUserSockets(userId);
+      return sockets.size > 0;
+    };
+
+    // --------------------------------------------------
+    // Helper: emit to all sockets of a user
+    // --------------------------------------------------
+    const emitToUser = (userId, event, data) => {
+      const sockets = getUserSockets(userId);
+
+      if (sockets.size === 0) {
+        return false;
+      }
+
+      for (const socketId of sockets) {
+        io.to(socketId).emit(event, data);
+      }
+
+      return true;
+    };
+
     // ==========================================
     // USER COMES ONLINE
     // ==========================================
     socket.on("user-online", async (userId) => {
       try {
-        onlineUsers.set(userId, socket.id);
-
-        await User.findByIdAndUpdate(userId, {
-          online: true,
-          socketId: socket.id,
-        });
-
-        io.emit(
-          "online-users",
-          Array.from(onlineUsers.keys())
-        );
-
-        console.log("User online:", userId);
-        console.log(
-          "Current online users:",
-          Array.from(onlineUsers.keys())
-        );
+        await registerUser(userId);
       } catch (error) {
         console.error("User online error:", error);
       }
@@ -54,7 +113,6 @@ const setupCallSocket = (io) => {
 
     // ==========================================
     // START CALL
-    // Flutter sends: call-user
     // ==========================================
     socket.on(
       "call-user",
@@ -66,35 +124,63 @@ const setupCallSocket = (io) => {
         callType,
       }) => {
         try {
-          const receiverSocketId =
-            onlineUsers.get(receiverId);
+          if (!callerId || !receiverId || !callId) {
+            socket.emit("call-error", {
+              message: "Invalid call information",
+            });
 
-          if (!receiverSocketId) {
+            return;
+          }
+
+          const normalizedCallerId = String(callerId);
+          const normalizedReceiverId = String(receiverId);
+
+          console.log(
+            `Call request: ${normalizedCallerId} -> ${normalizedReceiverId}`
+          );
+
+          console.log(
+            "Receiver sockets:",
+            Array.from(
+              getUserSockets(normalizedReceiverId)
+            )
+          );
+
+          if (!isUserOnline(normalizedReceiverId)) {
             socket.emit("call-error", {
               message: "User is offline",
             });
 
             console.log(
               "Call failed. User offline:",
-              receiverId
+              normalizedReceiverId
             );
 
             return;
           }
 
-          io.to(receiverSocketId).emit(
+          const delivered = emitToUser(
+            normalizedReceiverId,
             "incoming-call",
             {
               callId,
-              callerId,
+              callerId: normalizedCallerId,
               callerName,
-              receiverId,
+              receiverId: normalizedReceiverId,
               callType,
             }
           );
 
+          if (!delivered) {
+            socket.emit("call-error", {
+              message: "User is offline",
+            });
+
+            return;
+          }
+
           console.log(
-            `Call: ${callerName} (${callerId}) -> ${receiverId} [${callType}]`
+            `Call sent: ${callerName} (${normalizedCallerId}) -> ${normalizedReceiverId} [${callType}]`
           );
         } catch (error) {
           console.error(
@@ -111,52 +197,61 @@ const setupCallSocket = (io) => {
 
     // ==========================================
     // CALL ACCEPTED
-    // Flutter sends: call-accepted
     // ==========================================
     socket.on(
       "call-accepted",
       ({ receiverId, callId }) => {
-        const receiverSocketId =
-          onlineUsers.get(receiverId);
+        try {
+          if (!receiverId || !callId) {
+            return;
+          }
 
-        if (!receiverSocketId) {
+          const normalizedReceiverId = String(receiverId);
+
           console.log(
-            "Caller is no longer online:",
-            receiverId
+            "Call accepted:",
+            callId,
+            "forwarding to:",
+            normalizedReceiverId
           );
 
-          return;
-        }
+          const delivered = emitToUser(
+            normalizedReceiverId,
+            "call-accepted",
+            {
+              callId,
+            }
+          );
 
-        io.to(receiverSocketId).emit(
-          "call-accepted",
-          {
-            callId,
+          if (!delivered) {
+            console.log(
+              "Caller is no longer online:",
+              normalizedReceiverId
+            );
           }
-        );
-
-        console.log(
-          "Call accepted:",
-          callId
-        );
+        } catch (error) {
+          console.error(
+            "Call accepted error:",
+            error
+          );
+        }
       }
     );
 
     // ==========================================
     // CALL DECLINED
-    // Flutter sends: call-declined
     // ==========================================
     socket.on(
       "call-declined",
       ({ receiverId, callId }) => {
-        const receiverSocketId =
-          onlineUsers.get(receiverId);
-
-        if (!receiverSocketId) {
+        if (!receiverId || !callId) {
           return;
         }
 
-        io.to(receiverSocketId).emit(
+        const normalizedReceiverId = String(receiverId);
+
+        emitToUser(
+          normalizedReceiverId,
           "call-declined",
           {
             callId,
@@ -172,66 +267,80 @@ const setupCallSocket = (io) => {
 
     // ==========================================
     // WEBRTC OFFER
-    // Flutter sends: webrtc-offer
     // ==========================================
     socket.on(
       "webrtc-offer",
       ({ receiverId, offer }) => {
-        const receiverSocketId =
-          onlineUsers.get(receiverId);
-
-        if (!receiverSocketId) {
+        if (!receiverId || !offer) {
           console.log(
-            "Offer receiver offline:",
-            receiverId
+            "Invalid WebRTC offer"
           );
 
           return;
         }
 
-        io.to(receiverSocketId).emit(
+        const normalizedReceiverId = String(receiverId);
+
+        const delivered = emitToUser(
+          normalizedReceiverId,
           "webrtc-offer",
           {
             offer,
           }
         );
 
+        if (!delivered) {
+          console.log(
+            "Offer receiver offline:",
+            normalizedReceiverId
+          );
+
+          return;
+        }
+
         console.log(
           "WebRTC offer forwarded to:",
-          receiverId
+          normalizedReceiverId
         );
       }
     );
 
     // ==========================================
     // WEBRTC ANSWER
-    // Flutter sends: webrtc-answer
     // ==========================================
     socket.on(
       "webrtc-answer",
       ({ receiverId, answer }) => {
-        const receiverSocketId =
-          onlineUsers.get(receiverId);
-
-        if (!receiverSocketId) {
+        if (!receiverId || !answer) {
           console.log(
-            "Answer receiver offline:",
-            receiverId
+            "Invalid WebRTC answer"
           );
 
           return;
         }
 
-        io.to(receiverSocketId).emit(
+        const normalizedReceiverId = String(receiverId);
+
+        const delivered = emitToUser(
+          normalizedReceiverId,
           "webrtc-answer",
           {
             answer,
           }
         );
 
+        if (!delivered) {
+          console.log(
+            "Answer receiver offline:",
+            normalizedReceiverId
+          );
+
+          return;
+        }
+
         console.log(
           "WebRTC answer forwarded to:",
-          receiverId
+          normalizedReceiverId
         );
       }
     );
@@ -242,14 +351,14 @@ const setupCallSocket = (io) => {
     socket.on(
       "ice-candidate",
       ({ receiverId, candidate }) => {
-        const receiverSocketId =
-          onlineUsers.get(receiverId);
-
-        if (!receiverSocketId) {
+        if (!receiverId || !candidate) {
           return;
         }
 
-        io.to(receiverSocketId).emit(
+        const normalizedReceiverId = String(receiverId);
+
+        emitToUser(
+          normalizedReceiverId,
           "ice-candidate",
           {
             candidate,
@@ -260,19 +369,18 @@ const setupCallSocket = (io) => {
 
     // ==========================================
     // END CALL
-    // Flutter sends: call-ended
     // ==========================================
     socket.on(
       "call-ended",
       ({ receiverId, callId }) => {
-        const receiverSocketId =
-          onlineUsers.get(receiverId);
-
-        if (!receiverSocketId) {
+        if (!receiverId || !callId) {
           return;
         }
 
-        io.to(receiverSocketId).emit(
+        const normalizedReceiverId = String(receiverId);
+
+        emitToUser(
+          normalizedReceiverId,
           "call-ended",
           {
             callId,
@@ -297,35 +405,57 @@ const setupCallSocket = (io) => {
           socket.id
         );
 
-        for (
-          const [userId, socketId]
-          of onlineUsers.entries()
-        ) {
-          if (socketId === socket.id) {
-            onlineUsers.delete(userId);
+        const userId = socket.userId;
 
-            try {
-              await User.findByIdAndUpdate(
-                userId,
-                {
-                  online: false,
-                  socketId: null,
-                }
-              );
+        if (!userId) {
+          console.log(
+            "Disconnected socket had no registered user."
+          );
 
-              console.log(
-                "User offline:",
-                userId
-              );
-            } catch (error) {
-              console.error(
-                "Disconnect update error:",
-                error
-              );
+          return;
+        }
+
+        const sockets = onlineUsers.get(userId);
+
+        if (!sockets) {
+          return;
+        }
+
+        // Remove only this socket.
+        sockets.delete(socket.id);
+
+        // IMPORTANT:
+        // If another socket for the same user is still
+        // connected, the user must remain online.
+        if (sockets.size > 0) {
+          console.log(
+            `User ${userId} still has ${sockets.size} active socket(s).`
+          );
+
+          return;
+        }
+
+        // No sockets remain for this user.
+        onlineUsers.delete(userId);
+
+        try {
+          await User.findByIdAndUpdate(
+            userId,
+            {
+              online: false,
+              socketId: null,
             }
+          );
 
-            break;
-          }
+          console.log(
+            "User offline:",
+            userId
+          );
+        } catch (error) {
+          console.error(
+            "Disconnect update error:",
+            error
+          );
         }
 
         io.emit(

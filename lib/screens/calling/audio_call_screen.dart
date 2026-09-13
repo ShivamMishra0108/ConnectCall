@@ -10,6 +10,7 @@ import '../../core/theme/app_theme.dart';
 import '../../models/call_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/call_provider.dart';
+import '../../providers/incoming_call_provider.dart';
 import 'call_ended_screen.dart';
 
 class AudioCallScreen extends ConsumerStatefulWidget {
@@ -27,13 +28,15 @@ class AudioCallScreen extends ConsumerStatefulWidget {
   });
 
   @override
-  ConsumerState<AudioCallScreen> createState() => _AudioCallScreenState();
+  ConsumerState<AudioCallScreen> createState() =>
+      _AudioCallScreenState();
 }
 
-class _AudioCallScreenState extends ConsumerState<AudioCallScreen> {
+class _AudioCallScreenState
+    extends ConsumerState<AudioCallScreen> {
   final CallingService _callingService = CallingService();
 
-  final SignalingService _signalingService = SignalingService();
+  late final SignalingService _signalingService;
 
   Timer? _timer;
 
@@ -54,25 +57,49 @@ class _AudioCallScreenState extends ConsumerState<AudioCallScreen> {
   void initState() {
     super.initState();
 
+    _signalingService =
+        ref.read(incomingCallProvider).signalingService;
+
     _startCall();
   }
 
   Future<void> _startCall() async {
     try {
-      final currentUser = ref.read(authProvider).currentUser;
+      final currentUser =
+          ref.read(authProvider).currentUser;
 
       if (currentUser == null) {
-        throw const CallingException('You are not logged in.');
+        throw const CallingException(
+          'You are not logged in.',
+        );
       }
 
-      if (widget.userId == null || widget.userId!.isEmpty) {
-        throw const CallingException('The other user could not be identified.');
+      if (widget.userId == null ||
+          widget.userId!.isEmpty) {
+        throw const CallingException(
+          'The other user could not be identified.',
+        );
       }
 
       // Audio only.
-      await _callingService.initializeLocalMedia(video: false);
+      await _callingService.initializeLocalMedia(
+        video: false,
+      );
 
-      await _signalingService.connect(userId: currentUser.id);
+      // Use the shared application-level signaling socket.
+      //
+      // It was already connected by IncomingCallListener.
+      // If it is not connected for any reason, ensure it is started.
+      final incomingCallListener =
+          ref.read(incomingCallProvider);
+
+      await incomingCallListener.ensureStarted();
+
+      if (!_signalingService.isConnected) {
+        throw const CallingException(
+          'Signaling server is not connected.',
+        );
+      }
 
       await _callingService.createConnection(
         onIceCandidate: (candidate) {
@@ -87,10 +114,13 @@ class _AudioCallScreenState extends ConsumerState<AudioCallScreen> {
 
       if (widget.isIncoming) {
         // Incoming call:
-        // tell caller that we accepted it.
-        await Future.delayed(const Duration(milliseconds: 150));
+        // tell the original caller that we accepted it.
+        await Future.delayed(
+          const Duration(milliseconds: 150),
+        );
 
-        if (widget.callId != null) {
+        if (widget.callId != null &&
+            widget.callId!.isNotEmpty) {
           _signalingService.sendCallAccepted(
             receiverId: widget.userId!,
             callId: widget.callId!,
@@ -106,10 +136,13 @@ class _AudioCallScreenState extends ConsumerState<AudioCallScreen> {
               type: CallType.audio,
             );
 
-        final call = ref.read(callProvider).activeCall;
+        final call =
+            ref.read(callProvider).activeCall;
 
         if (call == null) {
-          throw const CallingException('Unable to create call.');
+          throw const CallingException(
+            'Unable to create call.',
+          );
         }
 
         _signalingService.sendCall(
@@ -127,8 +160,12 @@ class _AudioCallScreenState extends ConsumerState<AudioCallScreen> {
         _isConnecting = false;
       });
     } catch (e, stackTrace) {
-      debugPrint('CALL INITIALIZATION ERROR: $e');
-      debugPrint('STACK TRACE: $stackTrace');
+      debugPrint(
+        'CALL INITIALIZATION ERROR: $e',
+      );
+      debugPrint(
+        'STACK TRACE: $stackTrace',
+      );
 
       if (!mounted) return;
 
@@ -137,99 +174,190 @@ class _AudioCallScreenState extends ConsumerState<AudioCallScreen> {
       });
 
       _showError(
-        e is CallingException ? e.message : 'Unable to start audio call: $e',
+        e is CallingException
+            ? e.message
+            : 'Unable to start audio call: $e',
       );
     }
   }
 
   void _registerListeners() {
     if (widget.isIncoming) {
-      _signalingService.onOffer((data) async {
-        await _handleOffer(data);
-      });
+      _signalingService.onOffer(
+        (data) async {
+          if (_isEnding) return;
+
+          await _handleOffer(data);
+        },
+      );
     } else {
-      _signalingService.onCallAccepted((data) async {
-        final callId = data['callId'];
+      _signalingService.onCallAccepted(
+        (data) async {
+          if (_isEnding) return;
 
-        if (widget.callId != null && callId != widget.callId) {
-          return;
-        }
+          final callId = data['callId'];
 
-        await _createAndSendOffer();
-      });
+          if (widget.callId != null &&
+              callId != widget.callId) {
+            return;
+          }
+
+          await _createAndSendOffer();
+        },
+      );
     }
 
-    _signalingService.onAnswer((data) async {
-      final answer = Map<String, dynamic>.from(data['answer'] as Map);
+    _signalingService.onAnswer(
+      (data) async {
+        if (_isEnding) return;
 
-      await _callingService.setRemoteDescription(
-        type: answer['type'] as String,
-        sdp: answer['sdp'] as String,
-      );
+        try {
+          final answer =
+              Map<String, dynamic>.from(
+            data['answer'] as Map,
+          );
 
-      _remoteDescriptionSet = true;
+          await _callingService.setRemoteDescription(
+            type: answer['type'] as String,
+            sdp: answer['sdp'] as String,
+          );
 
-      await _flushPendingIceCandidates();
+          _remoteDescriptionSet = true;
 
-      _markConnected();
-    });
+          await _flushPendingIceCandidates();
 
-    _signalingService.onIceCandidate((data) async {
-      final candidateData = Map<String, dynamic>.from(data['candidate'] as Map);
+          _markConnected();
+        } catch (e, stackTrace) {
+          debugPrint(
+            'ANSWER HANDLING ERROR: $e',
+          );
+          debugPrint(
+            '$stackTrace',
+          );
 
-      final candidate = RTCIceCandidate(
-        candidateData['candidate'] as String?,
-        candidateData['sdpMid'] as String?,
-        candidateData['sdpMLineIndex'] as int?,
-      );
+          _showError(
+            'Unable to establish audio connection.',
+          );
+        }
+      },
+    );
 
-      if (_remoteDescriptionSet) {
-        await _callingService.addIceCandidate(
-          candidate: candidate.candidate ?? '',
-          sdpMid: candidate.sdpMid,
-          sdpMLineIndex: candidate.sdpMLineIndex,
+    _signalingService.onIceCandidate(
+      (data) async {
+        if (_isEnding) return;
+
+        try {
+          final candidateData =
+              Map<String, dynamic>.from(
+            data['candidate'] as Map,
+          );
+
+          final candidate = RTCIceCandidate(
+            candidateData['candidate'] as String?,
+            candidateData['sdpMid'] as String?,
+            candidateData['sdpMLineIndex'] as int?,
+          );
+
+          if (_remoteDescriptionSet) {
+            await _callingService.addIceCandidate(
+              candidate:
+                  candidate.candidate ?? '',
+              sdpMid: candidate.sdpMid,
+              sdpMLineIndex:
+                  candidate.sdpMLineIndex,
+            );
+          } else {
+            _pendingIceCandidates.add(candidate);
+          }
+        } catch (e, stackTrace) {
+          debugPrint(
+            'ICE CANDIDATE ERROR: $e',
+          );
+          debugPrint(
+            '$stackTrace',
+          );
+        }
+      },
+    );
+
+    _signalingService.onCallDeclined(
+      (data) {
+        if (_isEnding) return;
+
+        _handleRemoteEnd(
+          message: 'Call declined',
         );
-      } else {
-        _pendingIceCandidates.add(candidate);
-      }
-    });
+      },
+    );
 
-    _signalingService.onCallDeclined((data) {
-      _handleRemoteEnd(message: 'Call declined');
-    });
+    _signalingService.onCallEnded(
+      (data) {
+        if (_isEnding) return;
 
-    _signalingService.onCallEnded((data) {
-      _handleRemoteEnd(message: 'Call ended');
-    });
+        _handleRemoteEnd(
+          message: 'Call ended',
+        );
+      },
+    );
 
-    _signalingService.onCallError((data) {
-      final message = data['message'] as String? ?? 'Call failed.';
+    _signalingService.onCallError(
+      (data) {
+        if (_isEnding) return;
 
-      _showError(message);
-    });
+        final message =
+            data['message'] as String? ??
+                'Call failed.';
+
+        _showError(message);
+      },
+    );
   }
 
   Future<void> _createAndSendOffer() async {
+    if (_isEnding) return;
+
     try {
-      final offer = await _callingService.createOffer();
+      final offer =
+          await _callingService.createOffer();
 
-      final localDescription = await _callingService.peerConnection
-          ?.getLocalDescription();
+      final localDescription =
+          await _callingService.peerConnection
+              ?.getLocalDescription();
 
-      final description = localDescription ?? offer;
+      final description =
+          localDescription ?? offer;
 
       _signalingService.sendOffer(
         receiverId: widget.userId!,
-        offer: {'type': description.type, 'sdp': description.sdp},
+        offer: {
+          'type': description.type,
+          'sdp': description.sdp,
+        },
       );
-    } catch (e) {
-      _showError('Unable to create audio connection.');
+    } catch (e, stackTrace) {
+      debugPrint(
+        'CREATE OFFER ERROR: $e',
+      );
+      debugPrint(
+        '$stackTrace',
+      );
+
+      _showError(
+        'Unable to create audio connection.',
+      );
     }
   }
 
-  Future<void> _handleOffer(Map<String, dynamic> data) async {
+  Future<void> _handleOffer(
+    Map<String, dynamic> data,
+  ) async {
+    if (_isEnding) return;
+
     try {
-      final offer = Map<String, dynamic>.from(data['offer'] as Map);
+      final offer =
+          Map<String, dynamic>.from(
+        data['offer'] as Map,
+      );
 
       await _callingService.setRemoteDescription(
         type: offer['type'] as String,
@@ -240,40 +368,75 @@ class _AudioCallScreenState extends ConsumerState<AudioCallScreen> {
 
       await _flushPendingIceCandidates();
 
-      final answer = await _callingService.createAnswer();
+      final answer =
+          await _callingService.createAnswer();
 
-      final localDescription = await _callingService.peerConnection
-          ?.getLocalDescription();
+      final localDescription =
+          await _callingService.peerConnection
+              ?.getLocalDescription();
 
-      final description = localDescription ?? answer;
+      final description =
+          localDescription ?? answer;
 
       _signalingService.sendAnswer(
         receiverId: widget.userId!,
-        answer: {'type': description.type, 'sdp': description.sdp},
+        answer: {
+          'type': description.type,
+          'sdp': description.sdp,
+        },
       );
 
       _markConnected();
-    } catch (e) {
-      _showError('Unable to answer the audio call.');
+    } catch (e, stackTrace) {
+      debugPrint(
+        'HANDLE OFFER ERROR: $e',
+      );
+      debugPrint(
+        '$stackTrace',
+      );
+
+      _showError(
+        'Unable to answer the audio call.',
+      );
     }
   }
 
   Future<void> _flushPendingIceCandidates() async {
     if (!_remoteDescriptionSet) return;
 
-    for (final candidate in List<RTCIceCandidate>.from(_pendingIceCandidates)) {
-      await _callingService.addIceCandidate(
-        candidate: candidate.candidate ?? '',
-        sdpMid: candidate.sdpMid,
-        sdpMLineIndex: candidate.sdpMLineIndex,
-      );
-    }
+    final pendingCandidates =
+        List<RTCIceCandidate>.from(
+      _pendingIceCandidates,
+    );
 
     _pendingIceCandidates.clear();
+
+    for (final candidate in pendingCandidates) {
+      try {
+        await _callingService.addIceCandidate(
+          candidate:
+              candidate.candidate ?? '',
+          sdpMid: candidate.sdpMid,
+          sdpMLineIndex:
+              candidate.sdpMLineIndex,
+        );
+      } catch (e) {
+        debugPrint(
+          'PENDING ICE ERROR: $e',
+        );
+      }
+    }
   }
 
-  void _sendIceCandidate(RTCIceCandidate candidate) {
-    if (widget.userId == null) return;
+  void _sendIceCandidate(
+    RTCIceCandidate candidate,
+  ) {
+    if (_isEnding) return;
+
+    if (widget.userId == null ||
+        widget.userId!.isEmpty) {
+      return;
+    }
 
     _signalingService.sendIceCandidate(
       receiverId: widget.userId!,
@@ -286,7 +449,7 @@ class _AudioCallScreenState extends ConsumerState<AudioCallScreen> {
   }
 
   void _markConnected() {
-    if (!mounted) return;
+    if (!mounted || _isEnding) return;
 
     if (!_isConnected) {
       setState(() {
@@ -296,56 +459,89 @@ class _AudioCallScreenState extends ConsumerState<AudioCallScreen> {
 
       _startTimer();
 
-      ref.read(callProvider.notifier).markConnected();
+      ref
+          .read(callProvider.notifier)
+          .markConnected();
     }
   }
 
   void _startTimer() {
     if (_timer != null) return;
 
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
+    _timer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) {
+        if (!mounted || _isEnding) return;
 
-      setState(() {
-        _seconds++;
-      });
-    });
+        setState(() {
+          _seconds++;
+        });
+      },
+    );
   }
 
   String get _formattedTime {
-    final minutes = (_seconds ~/ 60).toString().padLeft(2, '0');
+    final minutes =
+        (_seconds ~/ 60)
+            .toString()
+            .padLeft(2, '0');
 
-    final seconds = (_seconds % 60).toString().padLeft(2, '0');
+    final seconds =
+        (_seconds % 60)
+            .toString()
+            .padLeft(2, '0');
 
     return '$minutes:$seconds';
   }
 
   Future<void> _toggleMute() async {
+    if (_isEnding) return;
+
     final newValue = !_isMuted;
 
-    await _callingService.setMicrophoneEnabled(!newValue);
+    try {
+      await _callingService
+          .setMicrophoneEnabled(!newValue);
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    setState(() {
-      _isMuted = newValue;
-    });
+      setState(() {
+        _isMuted = newValue;
+      });
 
-    ref.read(callProvider.notifier).toggleMute();
+      ref
+          .read(callProvider.notifier)
+          .toggleMute();
+    } catch (e) {
+      debugPrint(
+        'MUTE ERROR: $e',
+      );
+    }
   }
 
   Future<void> _toggleSpeaker() async {
+    if (_isEnding) return;
+
     final newValue = !_isSpeakerOn;
 
-    await _callingService.setSpeakerEnabled(newValue);
+    try {
+      await _callingService
+          .setSpeakerEnabled(newValue);
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    setState(() {
-      _isSpeakerOn = newValue;
-    });
+      setState(() {
+        _isSpeakerOn = newValue;
+      });
 
-    ref.read(callProvider.notifier).toggleSpeaker();
+      ref
+          .read(callProvider.notifier)
+          .toggleSpeaker();
+    } catch (e) {
+      debugPrint(
+        'SPEAKER ERROR: $e',
+      );
+    }
   }
 
   Future<void> _endCall() async {
@@ -357,17 +553,36 @@ class _AudioCallScreenState extends ConsumerState<AudioCallScreen> {
 
     _timer?.cancel();
 
-    if (widget.userId != null) {
+    final activeCall =
+        ref.read(callProvider).activeCall;
+
+    final String callId =
+        widget.callId ??
+        activeCall?.id ??
+        '';
+
+    if (widget.userId != null &&
+        widget.userId!.isNotEmpty &&
+        callId.isNotEmpty) {
       _signalingService.sendCallEnded(
         receiverId: widget.userId!,
-        callId: widget.callId ?? ref.read(callProvider).activeCall?.id ?? '',
+        callId: callId,
       );
     }
 
-    ref.read(callProvider.notifier).endCall(duration: _formattedTime);
+    ref
+        .read(callProvider.notifier)
+        .endCall(
+          duration: _formattedTime,
+        );
 
     await _callingService.dispose();
-    _signalingService.disconnect();
+
+    // IMPORTANT:
+    // Do NOT disconnect _signalingService here.
+    //
+    // It is the shared application signaling socket.
+    // Incoming calls and online presence still depend on it.
 
     if (!mounted) return;
 
@@ -382,17 +597,22 @@ class _AudioCallScreenState extends ConsumerState<AudioCallScreen> {
     );
   }
 
-  void _handleRemoteEnd({required String message}) async {
+  Future<void> _handleRemoteEnd({
+    required String message,
+  }) async {
     if (_isEnding) return;
 
     _isEnding = true;
 
     _timer?.cancel();
 
-    ref.read(callProvider.notifier).clearCall();
+    ref
+        .read(callProvider.notifier)
+        .clearCall();
 
     await _callingService.dispose();
-    _signalingService.disconnect();
+
+    // Do NOT disconnect the shared signaling service.
 
     if (!mounted) return;
 
@@ -410,16 +630,23 @@ class _AudioCallScreenState extends ConsumerState<AudioCallScreen> {
   void _showError(String message) {
     if (!mounted) return;
 
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+      ),
+    );
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+
+    // CallingService belongs to this call screen,
+    // so it MUST be disposed here.
     _callingService.dispose();
-    _signalingService.disconnect();
+
+    // IMPORTANT:
+    // Never disconnect the shared SignalingService here.
     super.dispose();
   }
 
@@ -431,7 +658,10 @@ class _AudioCallScreenState extends ConsumerState<AudioCallScreen> {
         child: Column(
           children: [
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 20,
+                vertical: 15,
+              ),
               child: Row(
                 children: [
                   IconButton(
@@ -456,9 +686,7 @@ class _AudioCallScreenState extends ConsumerState<AudioCallScreen> {
                 ],
               ),
             ),
-
             const Spacer(),
-
             Container(
               height: 145,
               width: 145,
@@ -466,7 +694,8 @@ class _AudioCallScreenState extends ConsumerState<AudioCallScreen> {
                 color: AppColors.darkSurface,
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color: AppColors.primary.withOpacity(0.5),
+                  color:
+                      AppColors.primary.withOpacity(0.5),
                   width: 2,
                 ),
               ),
@@ -481,9 +710,7 @@ class _AudioCallScreenState extends ConsumerState<AudioCallScreen> {
                 ),
               ),
             ),
-
             const SizedBox(height: 28),
-
             Text(
               widget.userName,
               style: const TextStyle(
@@ -492,44 +719,55 @@ class _AudioCallScreenState extends ConsumerState<AudioCallScreen> {
                 fontWeight: FontWeight.w700,
               ),
             ),
-
             const SizedBox(height: 8),
-
             Text(
-              _isConnected ? _formattedTime : '00:00',
-              style: const TextStyle(color: Colors.white60, fontSize: 14),
+              _isConnected
+                  ? _formattedTime
+                  : '00:00',
+              style: const TextStyle(
+                color: Colors.white60,
+                fontSize: 14,
+              ),
             ),
-
             const SizedBox(height: 8),
-
             Text(
               _isConnecting
                   ? 'Connecting...'
                   : _isConnected
-                  ? 'Connected'
-                  : 'Waiting for answer...',
+                      ? 'Connected'
+                      : 'Waiting for answer...',
               style: TextStyle(
-                color: _isConnected ? AppColors.online : Colors.white70,
+                color: _isConnected
+                    ? AppColors.online
+                    : Colors.white70,
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
               ),
             ),
-
             const Spacer(),
-
             Container(
-              margin: const EdgeInsets.symmetric(horizontal: 25),
-              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 20),
+              margin: const EdgeInsets.symmetric(
+                horizontal: 25,
+              ),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 22,
+                vertical: 20,
+              ),
               decoration: BoxDecoration(
                 color: AppColors.darkSurface,
-                borderRadius: BorderRadius.circular(25),
+                borderRadius:
+                    BorderRadius.circular(25),
               ),
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                mainAxisAlignment:
+                    MainAxisAlignment.spaceAround,
                 children: [
                   _CallControl(
-                    icon: _isMuted ? Icons.mic_off_rounded : Icons.mic_rounded,
-                    label: _isMuted ? 'Unmute' : 'Mute',
+                    icon: _isMuted
+                        ? Icons.mic_off_rounded
+                        : Icons.mic_rounded,
+                    label:
+                        _isMuted ? 'Unmute' : 'Mute',
                     active: _isMuted,
                     onTap: _toggleMute,
                   ),
@@ -550,7 +788,6 @@ class _AudioCallScreenState extends ConsumerState<AudioCallScreen> {
                 ],
               ),
             ),
-
             const SizedBox(height: 30),
           ],
         ),
@@ -566,10 +803,13 @@ class _AudioCallScreenState extends ConsumerState<AudioCallScreen> {
         .toList();
 
     if (parts.length >= 2) {
-      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+      return '${parts[0][0]}${parts[1][0]}'
+          .toUpperCase();
     }
 
-    return name.isNotEmpty ? name.substring(0, 1).toUpperCase() : 'U';
+    return name.isNotEmpty
+        ? name.substring(0, 1).toUpperCase()
+        : 'U';
   }
 }
 
@@ -593,14 +833,14 @@ class _CallControl extends StatelessWidget {
     final Color background = danger
         ? AppColors.danger
         : active
-        ? Colors.white
-        : const Color(0xFF334155);
+            ? Colors.white
+            : const Color(0xFF334155);
 
     final Color foreground = danger
         ? Colors.white
         : active
-        ? AppColors.darkCall
-        : Colors.white;
+            ? AppColors.darkCall
+            : Colors.white;
 
     return Column(
       children: [
@@ -613,13 +853,20 @@ class _CallControl extends StatelessWidget {
               color: background,
               shape: BoxShape.circle,
             ),
-            child: Icon(icon, color: foreground, size: 22),
+            child: Icon(
+              icon,
+              color: foreground,
+              size: 22,
+            ),
           ),
         ),
         const SizedBox(height: 8),
         Text(
           label,
-          style: const TextStyle(color: Colors.white70, fontSize: 11),
+          style: const TextStyle(
+            color: Colors.white70,
+            fontSize: 11,
+          ),
         ),
       ],
     );

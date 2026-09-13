@@ -3,25 +3,84 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/incoming_call_provider.dart';
 import '../contacts/contacts_screen.dart';
-import '../history/call_history_screen.dart';
-import '../calling/audio_call_screen.dart';
-import '../calling/video_call_screen.dart';
+import '../history/call_history_screen.dart'
+    hide CallType, CallDirection, CallStatus;
 import '../profile/user_profile_screen.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  ConsumerState<HomeScreen> createState() => _HomeScreenState();
+  ConsumerState<HomeScreen> createState() =>
+      _HomeScreenState();
 }
 
-class _HomeScreenState extends ConsumerState<HomeScreen> {
+class _HomeScreenState
+    extends ConsumerState<HomeScreen> {
   int _selectedIndex = 0;
+
+  bool _signalingInitialized = false;
+
+  @override
+  void initState() {
+    super.initState();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initializeSignaling();
+    });
+  }
+
+  Future<void> _initializeSignaling() async {
+    if (_signalingInitialized) {
+      return;
+    }
+
+    final currentUser =
+        ref.read(authProvider).currentUser;
+
+    if (currentUser == null) {
+      debugPrint(
+        'SIGNALING: No logged-in user found.',
+      );
+      return;
+    }
+
+    _signalingInitialized = true;
+
+    try {
+      debugPrint(
+        'SIGNALING: Starting shared signaling for ${currentUser.id}',
+      );
+
+      final incomingCallListener =
+          ref.read(incomingCallProvider);
+
+      await incomingCallListener.start();
+
+      if (!mounted) return;
+
+      debugPrint(
+        'SIGNALING: Shared signaling started successfully.',
+      );
+    } catch (e, stackTrace) {
+      debugPrint(
+        'SIGNALING INITIALIZATION ERROR: $e',
+      );
+
+      debugPrint(
+        '$stackTrace',
+      );
+
+      _signalingInitialized = false;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final currentUser = ref.watch(authProvider).currentUser;
+    final currentUser =
+        ref.watch(authProvider).currentUser;
 
     final pages = [
       const _HomeTab(),
@@ -52,7 +111,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             AppColors.primary.withOpacity(0.12),
         destinations: const [
           NavigationDestination(
-            icon: Icon(Icons.home_outlined),
+            icon: Icon(
+              Icons.home_outlined,
+            ),
             selectedIcon: Icon(
               Icons.home_rounded,
               color: AppColors.primary,
@@ -60,7 +121,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             label: 'Home',
           ),
           NavigationDestination(
-            icon: Icon(Icons.people_outline_rounded),
+            icon: Icon(
+              Icons.people_outline_rounded,
+            ),
             selectedIcon: Icon(
               Icons.people_rounded,
               color: AppColors.primary,
@@ -68,7 +131,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             label: 'Contacts',
           ),
           NavigationDestination(
-            icon: Icon(Icons.call_outlined),
+            icon: Icon(
+              Icons.call_outlined,
+            ),
             selectedIcon: Icon(
               Icons.call_rounded,
               color: AppColors.primary,
@@ -76,7 +141,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             label: 'Calls',
           ),
           NavigationDestination(
-            icon: Icon(Icons.person_outline_rounded),
+            icon: Icon(
+              Icons.person_outline_rounded,
+            ),
             selectedIcon: Icon(
               Icons.person_rounded,
               color: AppColors.primary,
@@ -93,11 +160,18 @@ class _HomeTab extends ConsumerWidget {
   const _HomeTab();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final currentUser = ref.watch(authProvider).currentUser;
+  Widget build(
+    BuildContext context,
+    WidgetRef ref,
+  ) {
+    final currentUser =
+        ref.watch(authProvider).currentUser;
 
-    final userName = currentUser?.name ?? 'User';
-    final userInitials = currentUser?.initials ?? 'U';
+    final userName =
+        currentUser?.name ?? 'User';
+
+    final userInitials =
+        currentUser?.initials ?? 'U';
 
     return SafeArea(
       child: SingleChildScrollView(
@@ -111,7 +185,6 @@ class _HomeTab extends ConsumerWidget {
           crossAxisAlignment:
               CrossAxisAlignment.start,
           children: [
-            // Header
             Row(
               children: [
                 Container(
@@ -133,9 +206,7 @@ class _HomeTab extends ConsumerWidget {
                     ),
                   ),
                 ),
-
                 const SizedBox(width: 12),
-
                 Expanded(
                   child: Column(
                     crossAxisAlignment:
@@ -161,7 +232,6 @@ class _HomeTab extends ConsumerWidget {
                     ],
                   ),
                 ),
-
                 IconButton(
                   onPressed: () {},
                   style: IconButton.styleFrom(
@@ -178,7 +248,6 @@ class _HomeTab extends ConsumerWidget {
 
             const SizedBox(height: 26),
 
-            // Search
             Container(
               height: 52,
               decoration: BoxDecoration(
@@ -224,7 +293,6 @@ class _HomeTab extends ConsumerWidget {
 
             const SizedBox(height: 14),
 
-            // Quick actions
             Row(
               children: [
                 Expanded(
@@ -233,15 +301,8 @@ class _HomeTab extends ConsumerWidget {
                     title: 'Audio Call',
                     subtitle: 'Voice only',
                     onTap: () {
-                      Navigator.push(
+                      _showContactSelectionMessage(
                         context,
-                        MaterialPageRoute(
-                          builder: (_) =>
-                              const AudioCallScreen(
-                            userName:
-                                'Sarah Johnson',
-                          ),
-                        ),
                       );
                     },
                   ),
@@ -253,15 +314,8 @@ class _HomeTab extends ConsumerWidget {
                     title: 'Video Call',
                     subtitle: 'Voice & video',
                     onTap: () {
-                      Navigator.push(
+                      _showContactSelectionMessage(
                         context,
-                        MaterialPageRoute(
-                          builder: (_) =>
-                              const VideoCallScreen(
-                            userName:
-                                'Sarah Johnson',
-                          ),
-                        ),
                       );
                     },
                   ),
@@ -271,7 +325,6 @@ class _HomeTab extends ConsumerWidget {
 
             const SizedBox(height: 30),
 
-            // Recent contacts heading
             Row(
               mainAxisAlignment:
                   MainAxisAlignment.spaceBetween,
@@ -328,6 +381,18 @@ class _HomeTab extends ConsumerWidget {
               isOnline: false,
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  void _showContactSelectionMessage(
+    BuildContext context,
+  ) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Select a contact to start a call.',
         ),
       ),
     );
@@ -514,14 +579,8 @@ class _ContactCard extends StatelessWidget {
 
           IconButton(
             onPressed: () {
-              Navigator.push(
+              _showContactSelectionMessage(
                 context,
-                MaterialPageRoute(
-                  builder: (_) =>
-                      AudioCallScreen(
-                    userName: name,
-                  ),
-                ),
               );
             },
             icon: const Icon(
@@ -533,14 +592,8 @@ class _ContactCard extends StatelessWidget {
 
           IconButton(
             onPressed: () {
-              Navigator.push(
+              _showContactSelectionMessage(
                 context,
-                MaterialPageRoute(
-                  builder: (_) =>
-                      VideoCallScreen(
-                    userName: name,
-                  ),
-                ),
               );
             },
             icon: const Icon(
@@ -550,6 +603,18 @@ class _ContactCard extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  void _showContactSelectionMessage(
+    BuildContext context,
+  ) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Select a contact with a registered user ID to call.',
+        ),
       ),
     );
   }
