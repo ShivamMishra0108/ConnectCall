@@ -11,27 +11,21 @@ class SignalingService {
 
   List<String> _onlineUserIds = <String>[];
 
-  List<String> get onlineUserIds =>
-      List<String>.unmodifiable(_onlineUserIds);
+  List<String> get onlineUserIds => List<String>.unmodifiable(_onlineUserIds);
 
   // Chrome running on the same PC as the Node.js server.
-  static const String serverUrl = 'http://localhost:3000';
-
+  static const String serverUrl = 'http://10.153.225.20:3000';
   // ============================================================
   // CONNECT
   // ============================================================
 
-  Future<void> connect({
-    required String userId,
-  }) async {
+  Future<void> connect({required String userId}) async {
     // Already connected for this same user.
     if (_socket != null &&
         _socket!.connected &&
         _isConnected &&
         _currentUserId == userId) {
-      print(
-        'Signaling socket already connected: ${_socket!.id}',
-      );
+      print('Signaling socket already connected: ${_socket!.id}');
       return;
     }
 
@@ -45,9 +39,7 @@ class SignalingService {
       io.OptionBuilder()
           .setTransports(<String>['websocket'])
           .disableAutoConnect()
-          .setAuth(<String, dynamic>{
-            'userId': userId,
-          })
+          .setAuth(<String, dynamic>{'userId': userId})
           .build(),
     );
 
@@ -65,9 +57,7 @@ class SignalingService {
         return;
       }
 
-      print(
-        'Socket connected: ${socket.id}',
-      );
+      print('Socket connected: ${socket.id}');
 
       _isConnected = true;
 
@@ -78,19 +68,12 @@ class SignalingService {
       //
       // Therefore send the STRING directly, not:
       // { "userId": userId }
-      socket.emit(
-        'user-online',
-        userId,
-      );
+      socket.emit('user-online', userId);
 
-      print(
-        'User online sent: $userId',
-      );
+      print('User online sent: $userId');
 
       // Ask the server for the latest online-user list.
-      socket.emit(
-        'get-online-users',
-      );
+      socket.emit('get-online-users');
 
       if (!completer.isCompleted) {
         completer.complete();
@@ -108,9 +91,7 @@ class SignalingService {
 
       _isConnected = false;
 
-      print(
-        'Socket disconnected. Reason: $reason',
-      );
+      print('Socket disconnected. Reason: $reason');
     });
 
     // ------------------------------------------------------------
@@ -124,15 +105,11 @@ class SignalingService {
 
       _isConnected = false;
 
-      print(
-        'Socket connection error: $error',
-      );
+      print('Socket connection error: $error');
 
       if (!completer.isCompleted) {
         completer.completeError(
-          Exception(
-            'Unable to connect to ConnectCall server: $error',
-          ),
+          Exception('Unable to connect to ConnectCall server: $error'),
         );
       }
     });
@@ -146,25 +123,19 @@ class SignalingService {
         return;
       }
 
-      print(
-        'Socket error: $error',
-      );
+      print('Socket error: $error');
     });
 
     // ------------------------------------------------------------
     // START CONNECTION
     // ------------------------------------------------------------
 
-    print(
-      'Connecting to signaling server: $serverUrl',
-    );
+    print('Connecting to signaling server: $serverUrl');
 
     socket.connect();
 
     try {
-      await completer.future.timeout(
-        const Duration(seconds: 10),
-      );
+      await completer.future.timeout(const Duration(seconds: 10));
     } on TimeoutException {
       // Only clean up if this is still the active socket.
       if (identical(_socket, socket) && !socket.connected) {
@@ -175,9 +146,7 @@ class SignalingService {
         _isConnected = false;
       }
 
-      throw Exception(
-        'Connection to signaling server timed out.',
-      );
+      throw Exception('Connection to signaling server timed out.');
     }
   }
 
@@ -185,25 +154,16 @@ class SignalingService {
   // INCOMING CALL
   // ============================================================
 
-  void onIncomingCall(
-    Function(Map<String, dynamic>) callback,
-  ) {
+  void onIncomingCall(Function(Map<String, dynamic>) callback) {
     _socket?.off('incoming-call');
 
-    _socket?.on(
-      'incoming-call',
-      (data) {
-        print(
-          'Incoming call received: $data',
-        );
+    _socket?.on('incoming-call', (data) {
+      print('Incoming call received: $data');
 
-        if (data is Map) {
-          callback(
-            Map<String, dynamic>.from(data),
-          );
-        }
-      },
-    );
+      if (data is Map) {
+        callback(Map<String, dynamic>.from(data));
+      }
+    });
   }
 
   // ============================================================
@@ -218,51 +178,35 @@ class SignalingService {
     required String callType,
   }) {
     if (!_isConnected || _socket == null) {
-      print(
-        'Cannot send call. Signaling socket is not connected.',
-      );
+      print('Cannot send call. Signaling socket is not connected.');
       return;
     }
 
-    print(
-      'Sending call: $callerId -> $receiverId',
-    );
+    print('Sending call: $callerId -> $receiverId');
 
-    _socket!.emit(
-      'call-user',
-      <String, dynamic>{
-        'callId': callId,
-        'callerId': callerId,
-        'callerName': callerName,
-        'receiverId': receiverId,
-        'callType': callType,
-      },
-    );
+    _socket!.emit('call-user', <String, dynamic>{
+      'callId': callId,
+      'callerId': callerId,
+      'callerName': callerName,
+      'receiverId': receiverId,
+      'callType': callType,
+    });
   }
 
   // ============================================================
   // CALL ERROR
   // ============================================================
 
-  void onCallError(
-    Function(Map<String, dynamic>) callback,
-  ) {
+  void onCallError(Function(Map<String, dynamic>) callback) {
     _socket?.off('call-error');
 
-    _socket?.on(
-      'call-error',
-      (data) {
-        print(
-          'Call error received: $data',
-        );
+    _socket?.on('call-error', (data) {
+      print('Call error received: $data');
 
-        if (data is Map) {
-          callback(
-            Map<String, dynamic>.from(data),
-          );
-        }
-      },
-    );
+      if (data is Map) {
+        callback(Map<String, dynamic>.from(data));
+      }
+    });
   }
 
   // ============================================================
@@ -274,44 +218,28 @@ class SignalingService {
     required Map<String, dynamic> offer,
   }) {
     if (!_isConnected || _socket == null) {
-      print(
-        'Cannot send offer. Signaling socket is not connected.',
-      );
+      print('Cannot send offer. Signaling socket is not connected.');
       return;
     }
 
-    print(
-      'Sending WebRTC offer to: $receiverId',
-    );
+    print('Sending WebRTC offer to: $receiverId');
 
-    _socket!.emit(
-      'webrtc-offer',
-      <String, dynamic>{
-        'receiverId': receiverId,
-        'offer': offer,
-      },
-    );
+    _socket!.emit('webrtc-offer', <String, dynamic>{
+      'receiverId': receiverId,
+      'offer': offer,
+    });
   }
 
-  void onOffer(
-    Function(Map<String, dynamic>) callback,
-  ) {
+  void onOffer(Function(Map<String, dynamic>) callback) {
     _socket?.off('webrtc-offer');
 
-    _socket?.on(
-      'webrtc-offer',
-      (data) {
-        print(
-          'WebRTC offer received: $data',
-        );
+    _socket?.on('webrtc-offer', (data) {
+      print('WebRTC offer received: $data');
 
-        if (data is Map) {
-          callback(
-            Map<String, dynamic>.from(data),
-          );
-        }
-      },
-    );
+      if (data is Map) {
+        callback(Map<String, dynamic>.from(data));
+      }
+    });
   }
 
   // ============================================================
@@ -323,44 +251,28 @@ class SignalingService {
     required Map<String, dynamic> answer,
   }) {
     if (!_isConnected || _socket == null) {
-      print(
-        'Cannot send answer. Signaling socket is not connected.',
-      );
+      print('Cannot send answer. Signaling socket is not connected.');
       return;
     }
 
-    print(
-      'Sending WebRTC answer to: $receiverId',
-    );
+    print('Sending WebRTC answer to: $receiverId');
 
-    _socket!.emit(
-      'webrtc-answer',
-      <String, dynamic>{
-        'receiverId': receiverId,
-        'answer': answer,
-      },
-    );
+    _socket!.emit('webrtc-answer', <String, dynamic>{
+      'receiverId': receiverId,
+      'answer': answer,
+    });
   }
 
-  void onAnswer(
-    Function(Map<String, dynamic>) callback,
-  ) {
+  void onAnswer(Function(Map<String, dynamic>) callback) {
     _socket?.off('webrtc-answer');
 
-    _socket?.on(
-      'webrtc-answer',
-      (data) {
-        print(
-          'WebRTC answer received: $data',
-        );
+    _socket?.on('webrtc-answer', (data) {
+      print('WebRTC answer received: $data');
 
-        if (data is Map) {
-          callback(
-            Map<String, dynamic>.from(data),
-          );
-        }
-      },
-    );
+      if (data is Map) {
+        callback(Map<String, dynamic>.from(data));
+      }
+    });
   }
 
   // ============================================================
@@ -372,211 +284,133 @@ class SignalingService {
     required Map<String, dynamic> candidate,
   }) {
     if (!_isConnected || _socket == null) {
-      print(
-        'Cannot send ICE candidate. Signaling socket is not connected.',
-      );
+      print('Cannot send ICE candidate. Signaling socket is not connected.');
       return;
     }
 
-    _socket!.emit(
-      'ice-candidate',
-      <String, dynamic>{
-        'receiverId': receiverId,
-        'candidate': candidate,
-      },
-    );
+    _socket!.emit('ice-candidate', <String, dynamic>{
+      'receiverId': receiverId,
+      'candidate': candidate,
+    });
   }
 
-  void onIceCandidate(
-    Function(Map<String, dynamic>) callback,
-  ) {
+  void onIceCandidate(Function(Map<String, dynamic>) callback) {
     _socket?.off('ice-candidate');
 
-    _socket?.on(
-      'ice-candidate',
-      (data) {
-        if (data is Map) {
-          callback(
-            Map<String, dynamic>.from(data),
-          );
-        }
-      },
-    );
+    _socket?.on('ice-candidate', (data) {
+      if (data is Map) {
+        callback(Map<String, dynamic>.from(data));
+      }
+    });
   }
 
   // ============================================================
   // CALL ACCEPTED
   // ============================================================
 
-  void sendCallAccepted({
-    required String receiverId,
-    required String callId,
-  }) {
+  void sendCallAccepted({required String receiverId, required String callId}) {
     if (!_isConnected || _socket == null) {
-      print(
-        'Cannot accept call. Signaling socket is not connected.',
-      );
+      print('Cannot accept call. Signaling socket is not connected.');
       return;
     }
 
-    print(
-      'Call accepted: $callId',
-    );
+    print('Call accepted: $callId');
 
-    _socket!.emit(
-      'call-accepted',
-      <String, dynamic>{
-        'receiverId': receiverId,
-        'callId': callId,
-      },
-    );
+    _socket!.emit('call-accepted', <String, dynamic>{
+      'receiverId': receiverId,
+      'callId': callId,
+    });
   }
 
-  void onCallAccepted(
-    Function(Map<String, dynamic>) callback,
-  ) {
+  void onCallAccepted(Function(Map<String, dynamic>) callback) {
     _socket?.off('call-accepted');
 
-    _socket?.on(
-      'call-accepted',
-      (data) {
-        print(
-          'Call accepted event received: $data',
-        );
+    _socket?.on('call-accepted', (data) {
+      print('Call accepted event received: $data');
 
-        if (data is Map) {
-          callback(
-            Map<String, dynamic>.from(data),
-          );
-        }
-      },
-    );
+      if (data is Map) {
+        callback(Map<String, dynamic>.from(data));
+      }
+    });
   }
 
   // ============================================================
   // CALL DECLINED
   // ============================================================
 
-  void sendCallDeclined({
-    required String receiverId,
-    required String callId,
-  }) {
+  void sendCallDeclined({required String receiverId, required String callId}) {
     if (!_isConnected || _socket == null) {
       return;
     }
 
-    print(
-      'Call declined: $callId',
-    );
+    print('Call declined: $callId');
 
-    _socket!.emit(
-      'call-declined',
-      <String, dynamic>{
-        'receiverId': receiverId,
-        'callId': callId,
-      },
-    );
+    _socket!.emit('call-declined', <String, dynamic>{
+      'receiverId': receiverId,
+      'callId': callId,
+    });
   }
 
-  void onCallDeclined(
-    Function(Map<String, dynamic>) callback,
-  ) {
+  void onCallDeclined(Function(Map<String, dynamic>) callback) {
     _socket?.off('call-declined');
 
-    _socket?.on(
-      'call-declined',
-      (data) {
-        print(
-          'Call declined event received: $data',
-        );
+    _socket?.on('call-declined', (data) {
+      print('Call declined event received: $data');
 
-        if (data is Map) {
-          callback(
-            Map<String, dynamic>.from(data),
-          );
-        }
-      },
-    );
+      if (data is Map) {
+        callback(Map<String, dynamic>.from(data));
+      }
+    });
   }
 
   // ============================================================
   // CALL ENDED
   // ============================================================
 
-  void sendCallEnded({
-    required String receiverId,
-    required String callId,
-  }) {
+  void sendCallEnded({required String receiverId, required String callId}) {
     if (!_isConnected || _socket == null) {
       return;
     }
 
-    print(
-      'Call ended: $callId',
-    );
+    print('Call ended: $callId');
 
-    _socket!.emit(
-      'call-ended',
-      <String, dynamic>{
-        'receiverId': receiverId,
-        'callId': callId,
-      },
-    );
+    _socket!.emit('call-ended', <String, dynamic>{
+      'receiverId': receiverId,
+      'callId': callId,
+    });
   }
 
-  void onCallEnded(
-    Function(Map<String, dynamic>) callback,
-  ) {
+  void onCallEnded(Function(Map<String, dynamic>) callback) {
     _socket?.off('call-ended');
 
-    _socket?.on(
-      'call-ended',
-      (data) {
-        print(
-          'Call ended event received: $data',
-        );
+    _socket?.on('call-ended', (data) {
+      print('Call ended event received: $data');
 
-        if (data is Map) {
-          callback(
-            Map<String, dynamic>.from(data),
-          );
-        }
-      },
-    );
+      if (data is Map) {
+        callback(Map<String, dynamic>.from(data));
+      }
+    });
   }
 
   // ============================================================
   // ONLINE USERS
   // ============================================================
 
-  void onOnlineUsers(
-    Function(List<String>) callback,
-  ) {
+  void onOnlineUsers(Function(List<String>) callback) {
     _socket?.off('online-users');
 
-    _socket?.on(
-      'online-users',
-      (data) {
-        print(
-          'Online users received: $data',
-        );
+    _socket?.on('online-users', (data) {
+      print('Online users received: $data');
 
-        if (data is List) {
-          _onlineUserIds = data
-              .map((id) => id.toString())
-              .toList();
+      if (data is List) {
+        _onlineUserIds = data.map((id) => id.toString()).toList();
 
-          callback(
-            List<String>.from(_onlineUserIds),
-          );
-        }
-      },
-    );
+        callback(List<String>.from(_onlineUserIds));
+      }
+    });
 
     if (_onlineUserIds.isNotEmpty) {
-      callback(
-        List<String>.from(_onlineUserIds),
-      );
+      callback(List<String>.from(_onlineUserIds));
     }
   }
 
@@ -593,9 +427,7 @@ class SignalingService {
   // ============================================================
 
   void disconnect() {
-    print(
-      'Disconnecting signaling socket...',
-    );
+    print('Disconnecting signaling socket...');
 
     _disposeSocket();
 
@@ -627,8 +459,6 @@ class SignalingService {
   // ============================================================
 
   bool get isConnected {
-    return _isConnected &&
-        _socket != null &&
-        _socket!.connected;
+    return _isConnected && _socket != null && _socket!.connected;
   }
 }
